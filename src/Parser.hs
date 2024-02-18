@@ -1,6 +1,8 @@
 
 module Parser where
 
+import           Control.Monad
+
 import           Data.Functor.Identity
 
 import qualified Data.Text             as T
@@ -52,19 +54,39 @@ reserved = Tk.reserved lexer
 symbol :: String -> Parser String
 symbol = Tk.symbol lexer
 
-parseBase :: Parser Decl
+parseBase :: Parser [Decl]
 parseBase =
     do
       _ <- symbol "Базовые виды:"
       xs <- identifier `sepBy` (symbol ",")
-      return . Base $ map T.pack xs
+      return [ Base . map T.pack $ xs ]
 
-parseDecl :: Parser Decl
+parseSynonymLine :: Parser DeclSynonym
+parseSynonymLine =
+    do
+      x <- identifier
+      _ <- symbol "+"
+      y <- identifier
+      _ <- symbol "->"
+      z <- identifier
+      return (T.pack x, T.pack y, T.pack z)
+
+parseSynonyms :: Parser [Decl]
+parseSynonyms =
+    do
+      _ <- symbol "Синонимы:"
+      _<- whiteSpace
+      ss <- parseSynonymLine `sepBy` whiteSpace
+      return (map Synonym ss)
+
+parseDecl :: Parser [Decl]
 parseDecl =
     do
       _ <- whiteSpace
-      parseBase
+      parseBase <|> parseSynonyms
 
+parseDecls :: Parser [Decl]
+parseDecls = fmap join $ many1 parseDecl
 
 test :: IO ()
 test =
@@ -72,4 +94,6 @@ test =
       let
           file = "rules/example.rule"
       content <- T.readFile file
-      parseTest parseDecl content
+      case parse parseDecls file content of
+        Left err -> putStrLn (show err)
+        Right ds -> mapM_ (putStrLn . show) ds
