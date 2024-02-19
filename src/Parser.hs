@@ -65,7 +65,7 @@ parseSynonymLine :: Parser DeclSynonym
 parseSynonymLine =
     do
       x <- identifier
-      _ <- symbol "+"
+      _ <- symbol "x"
       y <- identifier
       _ <- symbol "->"
       z <- identifier

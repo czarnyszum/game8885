@@ -1,5 +1,5 @@
 
-module Patter where
+module Pattern where
 
 import qualified Data.Text as T
 
