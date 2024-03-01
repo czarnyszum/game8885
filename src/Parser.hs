@@ -95,6 +95,25 @@ parseProb =
       _ <- symbol "%"
       return (p, x)
 
+
+parseSympathyLine :: Parser DeclSympathy
+parseSympathyLine =
+    do
+      p0 <- parsePattern
+      _ <- symbol "<"
+      clause <- manyTill parseProb (symbol ";")
+      return (p0, clause)
+
+parseSympathies :: Parser [Decl]
+parseSympathies =
+    do
+      _ <- symbol "Симпатии:"
+      braces $
+             do
+               _ <- whiteSpace
+               ps <- parseSympathyLine `sepBy` whiteSpace
+               return (map Sympathy ps)
+
 -- DeclCreation
 parseCreationLine :: Parser DeclCreation
 parseCreationLine =
@@ -148,7 +167,7 @@ parseDecl :: Parser [Decl]
 parseDecl =
     do
       _ <- whiteSpace
-      parseBase <|> parseSynonyms <|> parseCreations
+      parseBase <|> try parseSynonyms <|> parseCreations <|> parseSympathies
 
 parseDecls :: Parser [Decl]
 parseDecls = fmap join $ many1 parseDecl
