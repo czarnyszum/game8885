@@ -130,7 +130,7 @@ parseSynonymLine =
       x <- identifier
       _ <- symbol "x"
       y <- identifier
-      _ <- symbol "->"
+      _ <- symbol "~"
       z <- identifier
       return (T.pack x, T.pack y, T.pack z)
 
