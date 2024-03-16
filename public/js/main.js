@@ -21,8 +21,6 @@ function calcData(t0)
     }
 }
 
-
-
 function onLoad()
 {
     console.log("8885");
@@ -55,7 +53,7 @@ function onLoad()
             enabled: false
         },
         stroke: {
-            curve: 'smooth'
+            curve: 'straight'
         },
         title: {
             text: 'Dynamic Updating Chart',
