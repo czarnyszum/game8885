@@ -24,6 +24,7 @@ executable game8885
                 aeson,
                 base,
                 blaze-html,
+                bytestring >= 0.11.5.3,
                 containers,
                 directory,
                 filepath,
