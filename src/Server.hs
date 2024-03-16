@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 
 module Server where
 
@@ -5,25 +6,22 @@ import           Control.Concurrent
 -- import           Control.Exception
 import           Control.Monad.IO.Class
 
-import qualified Data.ByteString.Conversion as BS
-
-import           Network.Info               (ipv4)
-import           Network.WebSockets.Snap    as WS
+import           Network.WebSockets.Snap as WS
 
 import           System.Directory
 
 -- import           Text.Blaze.Html.Renderer.Utf8
 -- import           Text.Blaze.Html5              as Hx
 
-import qualified Snap.Blaze                 as Snap
-import           Snap.Core                  (Snap)
-import qualified Snap.Core                  as Snap
-import qualified Snap.Http.Server           as Snap
-import qualified Snap.Util.FileServe        as Snap
+import qualified Snap.Blaze              as Snap
+import           Snap.Core               (Snap)
+import qualified Snap.Core               as Snap
+import qualified Snap.Http.Server        as Snap
+import qualified Snap.Util.FileServe     as Snap
 
 -- import           Html.Css
+import           Ctx
 import           MainPage
-import           Prepare
 
 httpPort :: Int
 httpPort = 8000
@@ -44,10 +42,7 @@ rou ctx = Snap.route
     ]
 
 pageResponse :: MVar Ctx -> Snap ()
-pageResponse ctx =
-    do
-      p <- liftIO $ buildPage ctx
-      Snap.blaze . renderPage $ p
+pageResponse _ctx = Snap.blaze mainPage
 
 launchWS :: MVar Ctx -> Snap ()
 launchWS ctx = WS.runWebSocketsSnap (wsHandler ctx)
