@@ -16,3 +16,5 @@ instance Show a => Show (Pat a) where
     show (P1 p)     = show p
     show (P2 p0 p1) = "(" ++ (show p0) ++ ", " ++ (show p1) ++ ")"
 
+data ExpSp a = Var a | ConstBase T.Text
+data Pat a = E1 (ExpSp a) | E2 (ExpSp a) (ExpSp a)
