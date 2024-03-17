@@ -1,9 +1,13 @@
-
 module Decl where
 
 import qualified Data.Text as T
 
 import           Pattern
+
+type DeclColor = (T.Text, T.Text)
+
+showColor :: DeclColor -> String
+showColor (s, c) = (T.unpack s) ++ " ~ " ++ (T.unpack c)
 
 type DeclBase = [T.Text]
 
@@ -22,7 +26,12 @@ showCreation (p0, p1, cl) = (show p0) ++ " < "  ++ (show p1) ++ " -> " ++ (show 
 
 type DeclSympathy = (Pat T.Text, [(Pat T.Text, Int)])
 
-data Decl = Base DeclBase | Synonym DeclSynonym | Creation DeclCreation | Sympathy DeclSympathy
+data Decl =
+    Base DeclBase |
+    Synonym DeclSynonym |
+    Creation DeclCreation |
+    Sympathy DeclSympathy |
+    Color DeclColor
 
 showSympathy :: DeclSympathy -> String
 showSympathy (p0, cl) = (show p0) ++ " < " ++ (show cl)
@@ -32,3 +41,6 @@ instance Show Decl where
     show (Synonym ss)  = "Синоним: " ++ showSyn ss
     show (Creation cs) = "Правило рождения: " ++ showCreation cs
     show (Sympathy ss) = "Правило симпатий: " ++ showSympathy ss
+    show (Color cs)    = "Цвет: " ++ showColor cs
+
+

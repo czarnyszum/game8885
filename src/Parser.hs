@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 
 module Parser where
 
@@ -59,7 +60,6 @@ symbol = Tk.symbol lexer
 
 integer :: Parser Int
 integer = fmap fromIntegral $ Tk.natural lexer
-
 
 parseVarOrConst :: Parser (PatSp T.Text)
 parseVarOrConst =
@@ -163,11 +163,30 @@ parseSynonyms =
                ss <- parseSynonymLine `sepBy` whiteSpace
                return (map Synonym ss)
 
+parseColorLine :: Parser DeclColor
+parseColorLine =
+    do
+      xs <- identifier
+      _ <- symbol "~"
+      _ <- symbol "#"
+      cs <- manyTill (oneOf "0123456789abcdef") (symbol ";")
+      return (T.pack xs, T.pack ('#' : cs))
+
+parseColors :: Parser [Decl]
+parseColors =
+    do
+      _ <- symbol "Цвета:"
+      braces $
+             do
+               _<- whiteSpace
+               ss <- parseColorLine `sepBy` whiteSpace
+               return (map Color ss)
+
 parseDecl :: Parser [Decl]
 parseDecl =
     do
       _ <- whiteSpace
-      parseBase <|> try parseSynonyms <|> parseCreations <|> parseSympathies
+      parseBase <|> try parseSynonyms <|> parseCreations <|> parseSympathies <|> parseColors
 
 parseDecls :: Parser [Decl]
 parseDecls = fmap join $ many1 parseDecl
