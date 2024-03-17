@@ -103,8 +103,20 @@ creationAction x y sp =
       return (occ . newUp $ sp)
 
 rapeAction :: Ord b => Species b -> Species b -> Space b -> SpaceCtx b (Space b)
-rapeAction x y sp = undefined
-
+rapeAction x y sp =
+    do
+      ratio <- gets (view killRatio)
+      outcome <- sample randGen ratio
+      if outcome
+      then creationAction x y sp
+      else
+          do
+            let
+                currentUp = over population (M.adjust pred y . M.adjust pred x)
+                occ = over freeSpace pred
+                newUp = over population (M.adjust succ y)
+            modify (over space currentUp)
+            return (occ . newUp $ sp)
 
 killAction :: Ord b => Species b -> Space b -> SpaceCtx b (Space b)
 killAction x sp =
