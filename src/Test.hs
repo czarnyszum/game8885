@@ -23,8 +23,8 @@ test =
             do
 --              print ds
               let
-                  s0 = Pure (T.pack "Синий")
-                  s1 = Pure (T.pack "Красный")
+                  s0 = Pure (T.pack "Желтый")
+                  s1 = fromJust $ mix (T.pack "Желтый") (T.pack "Красный")
                   chk (Sympathy ss) = (show ss) ++ " againts " ++ (show $ matchSympathy ss (s0, s1))
                   chk _             = ""
                   flt (Sympathy _) = True

@@ -1,13 +1,16 @@
 module Decl where
 
-import qualified Data.Map    as M
-import           Data.Maybe
-import qualified Data.Text   as T
+import           Control.Lens
+import           Control.Monad.Except
+import           Control.Monad.State
+
+import           Data.List
+import qualified Data.Map             as M
+-- import           Data.Maybe
+import qualified Data.Text            as T
 
 import           Pattern
 import           Species
-
-import           Debug.Trace
 
 type DeclColor = (T.Text, T.Text)
 
@@ -48,6 +51,54 @@ instance Show Decl where
     show (Sympathy ss) = "Правило симпатий: " ++ showSympathy ss
     show (Color cs)    = "Цвет: " ++ showColor cs
 
+baseAction :: DeclBase -> SpaceCtx T.Text ()
+baseAction xs =
+    let
+        upB ss = sort (ss ++ xs)
+        res t = M.insert t (Pure t)
+        upR m = foldr res m xs
+        up = over spBase upB .
+             over nameResolver upR
+    in
+      modify up
+
+synonymAction :: DeclSynonym -> SpaceCtx T.Text ()
+synonymAction (t, t0, t1) =
+    let
+        upR = M.insert t (mix t0 t1)
+        up = over nameResolver upR
+    in
+      modify up
+
+mixAction :: SpaceCtx T.Text ()
+mixAction =
+    do
+      ss <- gets (view spBase)
+      let
+          up = set spAll (genAll ss)
+      modify up
+
+resolveSpecies :: T.Text -> SpaceCtx T.Text (Species T.Text)
+resolveSpecies s =
+    do
+      xs <- gets (view nameResolver)
+      case M.lookup s xs of
+        Nothing -> throwError (ErrorResolution s)
+        Just sp -> return sp
+
+colorAction :: DeclColor -> SpaceCtx T.Text ()
+colorAction (s, c) =
+    do
+      sp <- resolveSpecies s
+      let
+          upC = M.insert sp c
+          up = over spColor upC
+      modify up
+
+
+
+{-
+
 matchSympathy :: DeclSympathy -> (Species T.Text, Species T.Text) -> Maybe Rational
 matchSympathy (p0, ps) (s0, s1) =
     do
@@ -67,3 +118,4 @@ matchSympathy (p0, ps) (s0, s1) =
             then trace "Good" $ Just c
             else trace "Not good" $ Nothing
 
+-}

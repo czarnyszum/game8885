@@ -6,14 +6,14 @@ import qualified Data.Text as T
 
 import           Species
 
-data PatSp a = Any | Var a | ConstBase T.Text
+data PatSp a = Any | Var a | ConstBase T.Text deriving Eq
 
 instance Show a => Show (PatSp a) where
     show Any           = "(*)"
     show (Var v)       = show v
     show (ConstBase c) = T.unpack c
 
-data Pat a = PAny | P1 (PatSp a) | P2 (PatSp a) (PatSp a)
+data Pat a = PAny | P1 (PatSp a) | P2 (PatSp a) (PatSp a) deriving Eq
 
 instance Show a => Show (Pat a) where
     show PAny       = "*"
