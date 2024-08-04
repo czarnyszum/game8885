@@ -72,6 +72,12 @@ parseVarOrConst =
 parseSp :: Parser (PatSp T.Text)
 parseSp = parseVarOrConst <|> (fmap (const Any) $ symbol "*")
 
+parseP0 :: Parser (Pat T.Text)
+parseP0 = fmap (const PAny) $ symbol "*"
+
+parseP1 :: Parser (Pat T.Text)
+parseP1 = fmap P1 $ parseVarOrConst <|> (fmap (const Any) $ parens . symbol $ "*")
+
 parseP2 :: Parser (Pat T.Text)
 parseP2 =
     do
@@ -84,7 +90,7 @@ parseP2 =
 
 
 parsePattern :: Parser (Pat T.Text)
-parsePattern = (fmap P1 parseSp) <|> parseP2
+parsePattern = try parseP0 <|> try parseP1 <|> parseP2
 
 parseProb :: Parser ((Pat T.Text), Int)
 parseProb =
@@ -95,6 +101,13 @@ parseProb =
       _ <- symbol "%"
       return (p, x)
 
+normalize :: [(a, Int)] -> [(a, Rational)]
+normalize xs =
+    let
+        s = sum $ map snd xs
+        f (x, y) = (x, fromIntegral y / fromIntegral s)
+    in
+      map f xs
 
 parseSympathyLine :: Parser DeclSympathy
 parseSympathyLine =
@@ -102,7 +115,7 @@ parseSympathyLine =
       p0 <- parsePattern
       _ <- symbol "<"
       clause <- manyTill parseProb (symbol ";")
-      return (p0, clause)
+      return (p0, normalize clause)
 
 parseSympathies :: Parser [Decl]
 parseSympathies =
@@ -123,7 +136,7 @@ parseCreationLine =
       p1 <- parsePattern
       _ <- symbol "->"
       clause <- manyTill parseProb (symbol ";")
-      return (p0, p1, clause)
+      return (p0, p1, normalize clause)
 
 
 parseCreations :: Parser [Decl]
@@ -191,6 +204,7 @@ parseDecl =
 parseDecls :: Parser [Decl]
 parseDecls = fmap join $ many1 parseDecl
 
+{-
 test :: IO ()
 test =
     do
@@ -200,3 +214,4 @@ test =
       case parse parseDecls file content of
         Left err -> putStrLn (show err)
         Right ds -> mapM_ (putStrLn . show) ds
+-}

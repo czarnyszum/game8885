@@ -1,8 +1,13 @@
 module Decl where
 
-import qualified Data.Text as T
+import qualified Data.Map    as M
+import           Data.Maybe
+import qualified Data.Text   as T
 
 import           Pattern
+import           Species
+
+import           Debug.Trace
 
 type DeclColor = (T.Text, T.Text)
 
@@ -19,12 +24,12 @@ type DeclSynonym = (T.Text, T.Text, T.Text)
 showSyn :: DeclSynonym -> String
 showSyn (x, y, z) = (T.unpack x) ++ " x " ++ (T.unpack y) ++ " ~ " ++ (T.unpack z)
 
-type DeclCreation = (Pat T.Text, Pat T.Text, [(Pat T.Text, Int)])
+type DeclCreation = (Pat T.Text, Pat T.Text, [(Pat T.Text, Rational)])
 
 showCreation :: DeclCreation -> String
 showCreation (p0, p1, cl) = (show p0) ++ " < "  ++ (show p1) ++ " -> " ++ (show cl)
 
-type DeclSympathy = (Pat T.Text, [(Pat T.Text, Int)])
+type DeclSympathy = (Pat T.Text, [(Pat T.Text, Rational)])
 
 data Decl =
     Base DeclBase |
@@ -43,4 +48,22 @@ instance Show Decl where
     show (Sympathy ss) = "Правило симпатий: " ++ showSympathy ss
     show (Color cs)    = "Цвет: " ++ showColor cs
 
+matchSympathy :: DeclSympathy -> (Species T.Text, Species T.Text) -> Maybe Rational
+matchSympathy (p0, ps) (s0, s1) =
+    do
+      subst0 <- patternMatch p0 s0
+      let
+          f (p, c) =
+              do
+                sub <- patternMatch p s1
+                return (sub, c)
+          substs = catMaybes $ map f ps
+          msg0 = (show subst0) ++ "\nSecond part: " ++ (show (ps, s1))
+          msg1 = show subst0
+      case substs of
+        []              -> trace ("\nSecond part failed. First match: " ++ msg0) Nothing
+        (subst1, c) : _ ->
+            if trace msg0 . trace msg1 $ all id $ M.intersectionWith (==) subst0 subst1
+            then trace "Good" $ Just c
+            else trace "Not good" $ Nothing
 

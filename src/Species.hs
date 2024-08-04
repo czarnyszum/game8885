@@ -13,7 +13,7 @@ import           System.Random
 
 import           Probability.Sample
 
-data Species b = Pure b | Mix b b deriving (Eq, Ord)
+data Species b = Pure b | Mix b b deriving (Eq, Ord, Show)
 
 mix :: Ord b => b -> b -> Maybe (Species b)
 mix x y | x < y = Just (Mix x y)
