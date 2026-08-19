@@ -47,3 +47,59 @@ body {
     color: var(--color-low-white);
 
 }
+
+#layout {
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.title {
+    color: var(--color-high-white);
+    font-weight: bold;
+    font-size: 22px;
+    margin: 8px 0 16px 0;
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.controls label {
+    color: var(--color-low-white);
+}
+
+.controls select {
+    background: var(--color-low-gray);
+    color: var(--color-high-white);
+    border: 1px solid var(--color-high-gray);
+    font-family: 'Victor Mono';
+    font-size: 14px;
+    padding: 4px 8px;
+}
+
+.button-ctrl {
+    background: var(--color-low-gray);
+    color: var(--color-high-white);
+    border: 1px solid var(--color-high-gray);
+    font-family: 'Victor Mono';
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.button-ctrl:hover {
+    background: var(--color-secondary-1-3);
+}
+
+.status {
+    color: var(--color-low-white);
+    margin-bottom: 12px;
+    min-height: 1.2em;
+}
+
+.chart {
+    width: 100%;
+}

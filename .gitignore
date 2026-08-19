@@ -73,3 +73,6 @@ flycheck_*.el
 # network security
 /network-security.data
 
+
+# local build output
+.build/

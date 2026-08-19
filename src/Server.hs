@@ -3,15 +3,8 @@
 module Server where
 
 import           Control.Concurrent
--- import           Control.Exception
-import           Control.Monad.IO.Class
 
 import           Network.WebSockets.Snap as WS
-
-import           System.Directory
-
--- import           Text.Blaze.Html.Renderer.Utf8
--- import           Text.Blaze.Html5              as Hx
 
 import qualified Snap.Blaze              as Snap
 import           Snap.Core               (Snap)
@@ -19,19 +12,16 @@ import qualified Snap.Core               as Snap
 import qualified Snap.Http.Server        as Snap
 import qualified Snap.Util.FileServe     as Snap
 
--- import           Html.Css
 import           Ctx
 import           MainPage
 
 httpPort :: Int
 httpPort = 8000
 
-app :: MVar Ctx -> Snap ()
-app ctx =
-    do
-      rou ctx
+app :: Ctx -> Snap ()
+app ctx = rou ctx
 
-rou :: MVar Ctx -> Snap ()
+rou :: Ctx -> Snap ()
 rou ctx = Snap.route
       [ ("",               Snap.ifTop $ pageResponse ctx)
       , ("ws",             launchWS ctx)
@@ -41,22 +31,28 @@ rou ctx = Snap.route
       , ("font",           Snap.serveDirectory "public/font")
     ]
 
-pageResponse :: MVar Ctx -> Snap ()
+pageResponse :: Ctx -> Snap ()
 pageResponse _ctx = Snap.blaze mainPage
 
-launchWS :: MVar Ctx -> Snap ()
+launchWS :: Ctx -> Snap ()
 launchWS ctx = WS.runWebSocketsSnap (wsHandler ctx)
 
 launch :: IO ()
-launch =
-    do
-      ctx <- initCtx
-      Snap.httpServe config (app ctx)
+launch = do
+    rules <- listRuleFiles
+    let defaultRule = if "rules/8885.rule" `elem` rules then "rules/8885.rule"
+                      else if null rules then "rules/8885.rule" else head rules
+    r <- initGame defaultRule
+    gs <- case r of
+            Left err -> error err
+            Right g  -> return g
+    gameVar <- newMVar gs
+    clientsVar <- newMVar []
+    let ctx = Ctx gameVar clientsVar 100 20000 rules defaultRule
+    _ <- forkIO (ticker ctx)
+    Snap.httpServe config (app ctx)
   where
-    config  =
+    config =
         Snap.setBind "127.0.0.1" $
---        Snap.setBind addr $
         Snap.setPort httpPort $
---        Snap.setErrorLog  Snap.ConfigNoLog $
---        Snap.setAccessLog Snap.ConfigNoLog $
         Snap.defaultConfig

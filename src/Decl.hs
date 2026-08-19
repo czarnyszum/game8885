@@ -1,121 +1,280 @@
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TemplateHaskell #-}
+
+-- | Declarations produced by the DSL parser, and the compiler that turns a
+--   list of declarations into a fully interpreted "Pattern.Tables" value.
 module Decl where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.State
+import           Control.Monad
 
-import           Data.List
-import qualified Data.Map             as M
--- import           Data.Maybe
-import qualified Data.Text            as T
+import qualified Data.List  as L
+import qualified Data.Map   as M
+import           Data.Ratio ((%))
+import qualified Data.Text  as T
 
 import           Pattern
 import           Species
 
-type DeclColor = (T.Text, T.Text)
+import           System.Random (StdGen)
 
-showColor :: DeclColor -> String
-showColor (s, c) = (T.unpack s) ++ " ~ " ++ (T.unpack c)
+-- ---------------------------------------------------------------------------
+-- Declarations (name level, directly parseable)
 
-type DeclBase = [T.Text]
+-- | Action specification for a species: a kill percentage or the special
+--   white behavior (~смешанные~ — kill iff cross-color reproducers exist).
+data ActionSpec = ActionPercent Int | ActionCross | ActionCrossPercent Int deriving Show
 
-showBase :: DeclBase -> String
-showBase bs = concatMap (\t -> " " ++ T.unpack t) bs
+-- | Partner preference: preferred set, fallback set, optional condition
+--   gating the fallback.
+data PartnerSpec = PartnerSpec [PatSp T.Text] [PatSp T.Text] (Maybe Cond)
+  deriving Show
 
-type DeclSynonym = (T.Text, T.Text, T.Text)
+-- | Kill rule: target tokens and excluded species names.
+data KillSpec = KillSpec [PatSp T.Text] [T.Text] deriving Show
 
-showSyn :: DeclSynonym -> String
-showSyn (x, y, z) = (T.unpack x) ++ " x " ++ (T.unpack y) ++ " ~ " ++ (T.unpack z)
+-- | Sympathy rule: actor pattern and clauses (partner pattern, percent,
+--   optional condition).
+data SympathySpec = SympathySpec (Pat T.Text) [(Pat T.Text, Int, Maybe Cond)]
+  deriving Show
 
-type DeclCreation = (Pat T.Text, Pat T.Text, [(Pat T.Text, Rational)])
-
-showCreation :: DeclCreation -> String
-showCreation (p0, p1, cl) = (show p0) ++ " < "  ++ (show p1) ++ " -> " ++ (show cl)
-
-type DeclSympathy = (Pat T.Text, [(Pat T.Text, Rational)])
+-- | Creation rule: actor pattern, partner pattern and result clauses.
+data CreationSpec = CreationSpec (Pat T.Text) (Pat T.Text) [(Pat T.Text, Int)]
+  deriving Show
 
 data Decl =
-    Base DeclBase |
-    Synonym DeclSynonym |
-    Creation DeclCreation |
-    Sympathy DeclSympathy |
-    Color DeclColor
-
-showSympathy :: DeclSympathy -> String
-showSympathy (p0, cl) = (show p0) ++ " < " ++ (show cl)
+      DeclBase [T.Text]
+    | DeclSynonym (T.Text, T.Text, T.Text)
+    | DeclColor (T.Text, T.Text)
+    | DeclParams [(T.Text, T.Text)]
+    | DeclActions [(T.Text, ActionSpec)]
+    | DeclPartners [(T.Text, PartnerSpec)]
+    | DeclKills [(T.Text, KillSpec)]
+    | DeclSympathies [SympathySpec]
+    | DeclCreations [CreationSpec]
 
 instance Show Decl where
-    show (Base bs)     = "Базовые виды:" ++ (showBase bs)
-    show (Synonym ss)  = "Синоним: " ++ showSyn ss
-    show (Creation cs) = "Правило рождения: " ++ showCreation cs
-    show (Sympathy ss) = "Правило симпатий: " ++ showSympathy ss
-    show (Color cs)    = "Цвет: " ++ showColor cs
+    show (DeclBase xs)         = "Базовые виды:" ++ concatMap ((" " ++) . T.unpack) xs
+    show (DeclSynonym (x, y, z)) = "Синоним: " ++ T.unpack x ++ " x " ++ T.unpack y ++ " ~ " ++ T.unpack z
+    show (DeclColor (n, c))    = "Цвет: " ++ T.unpack n ++ " " ++ T.unpack c
+    show (DeclParams ps)       = "Параметры: " ++ show ps
+    show (DeclActions as)      = "Действия: " ++ show as
+    show (DeclPartners ps)     = "Партнёры: " ++ show ps
+    show (DeclKills ks)        = "Убийство: " ++ show ks
+    show (DeclSympathies ss)   = "Симпатии: " ++ show ss
+    show (DeclCreations cs)    = "Рождение: " ++ show cs
 
-baseAction :: DeclBase -> SpaceCtx T.Text ()
-baseAction xs =
-    let
-        upB ss = sort (ss ++ xs)
-        res t = M.insert t (Pure t)
-        upR m = foldr res m xs
-        up = over spBase upB .
-             over nameResolver upR
-    in
-      modify up
+-- ---------------------------------------------------------------------------
+-- Errors
 
-synonymAction :: DeclSynonym -> SpaceCtx T.Text ()
-synonymAction (t, t0, t1) =
-    let
-        upR = M.insert t (mix t0 t1)
-        up = over nameResolver upR
-    in
-      modify up
+data ErrorKind =
+      ErrorResolution T.Text        -- name cannot be resolved
+    | ErrorValidation T.Text        -- a rule is inconsistent
 
-mixAction :: SpaceCtx T.Text ()
-mixAction =
-    do
-      ss <- gets (view spBase)
-      let
-          up = set spAll (genAll ss)
-      modify up
+instance Show ErrorKind where
+    show (ErrorResolution n) = "Не удалось разрешить имя: " ++ T.unpack n
+    show (ErrorValidation m) = "Ошибка валидации: " ++ T.unpack m
 
-resolveSpecies :: T.Text -> SpaceCtx T.Text (Species T.Text)
-resolveSpecies s =
-    do
-      xs <- gets (view nameResolver)
-      case M.lookup s xs of
-        Nothing -> throwError (ErrorResolution s)
-        Just sp -> return sp
+-- ---------------------------------------------------------------------------
+-- Compiler
 
-colorAction :: DeclColor -> SpaceCtx T.Text ()
-colorAction (s, c) =
-    do
-      sp <- resolveSpecies s
-      let
-          upC = M.insert sp c
-          up = over spColor upC
-      modify up
+-- | Intermediate compile state.
+data CS = CS {
+      _csBase :: [T.Text],
+      _csSyn  :: [(T.Text, T.Text, T.Text)],
+      _csCol  :: [(T.Text, T.Text)],
+      _csEnv  :: Env,
+      _csAct  :: [(T.Text, ActionSpec)],
+      _csPar  :: [(T.Text, PartnerSpec)],
+      _csKill :: [(T.Text, KillSpec)],
+      _csSym  :: [SympathySpec],
+      _csCre  :: [CreationSpec]
+    }
 
+emptyCS :: CS
+emptyCS = CS [] [] [] defaultEnv [] [] [] [] []
 
+applyDecl :: CS -> Decl -> Either ErrorKind CS
+applyDecl cs (DeclBase xs)     = Right cs { _csBase = xs }
+applyDecl cs (DeclSynonym s)   = Right cs { _csSyn = _csSyn cs ++ [s] }
+applyDecl cs (DeclColor p)     = Right cs { _csCol = _csCol cs ++ [p] }
+applyDecl cs (DeclParams ps)   = foldM applyParam cs ps
+applyDecl cs (DeclActions as)  = Right cs { _csAct = _csAct cs ++ as }
+applyDecl cs (DeclPartners ps) = Right cs { _csPar = _csPar cs ++ ps }
+applyDecl cs (DeclKills ks)    = Right cs { _csKill = _csKill cs ++ ks }
+applyDecl cs (DeclSympathies ss) = Right cs { _csSym = _csSym cs ++ ss }
+applyDecl cs (DeclCreations cr) = Right cs { _csCre = _csCre cs ++ cr }
 
-{-
+applyParam :: CS -> (T.Text, T.Text) -> Either ErrorKind CS
+applyParam cs (name, value) =
+    case name of
+      "Поле"           -> setInt envSpaceSize
+      "Начало"         -> setInt envInitial
+      "Победа"         -> setInt envWin
+      "Максимум шагов" -> setInt envMaxSteps
+      "Изнасилование"  -> setRat envRape
+      _ -> Left (ErrorValidation ("Неизвестный параметр: " <> name))
+  where
+    setInt :: Lens' Env Int -> Either ErrorKind CS
+    setInt l =
+        case reads (T.unpack value) of
+          [(n, "")] -> Right cs { _csEnv = set l n (_csEnv cs) }
+          _ -> Left (ErrorValidation ("Некорректное значение параметра " <> name <> ": " <> value))
+    setRat :: Lens' Env Rational -> Either ErrorKind CS
+    setRat l =
+        case T.stripSuffix "%" value of
+          Just pct ->
+              case (reads (T.unpack pct) :: [(Int, String)]) of
+                [(n, "")] -> Right cs { _csEnv = set l (fromIntegral n % 100) (_csEnv cs) }
+                _ -> Left (ErrorValidation ("Некорректный процент параметра " <> name <> ": " <> value))
+          Nothing -> Left (ErrorValidation ("Параметр " <> name <> " должен быть задан в процентах"))
 
-matchSympathy :: DeclSympathy -> (Species T.Text, Species T.Text) -> Maybe Rational
-matchSympathy (p0, ps) (s0, s1) =
-    do
-      subst0 <- patternMatch p0 s0
-      let
-          f (p, c) =
-              do
-                sub <- patternMatch p s1
-                return (sub, c)
-          substs = catMaybes $ map f ps
-          msg0 = (show subst0) ++ "\nSecond part: " ++ (show (ps, s1))
-          msg1 = show subst0
-      case substs of
-        []              -> trace ("\nSecond part failed. First match: " ++ msg0) Nothing
-        (subst1, c) : _ ->
-            if trace msg0 . trace msg1 $ all id $ M.intersectionWith (==) subst0 subst1
-            then trace "Good" $ Just c
-            else trace "Not good" $ Nothing
+-- | Resolve a species name (base or hybrid).
+resolveSpecies :: Ord b => M.Map T.Text (Species b) -> T.Text -> Either ErrorKind (Species b)
+resolveSpecies resolver n =
+    case M.lookup n resolver of
+      Just s  -> Right s
+      Nothing -> Left (ErrorResolution n)
 
--}
+-- | Compile a list of declarations into a full rule table.
+compileDecls :: [Decl] -> StdGen -> Either ErrorKind (Tables T.Text)
+compileDecls decls seed = do
+    cs <- foldM applyDecl emptyCS decls
+    let bases = _csBase cs
+    if null bases
+    then Left (ErrorValidation "Не заданы базовые виды")
+    else do
+      let baseSp = map Pure bases
+          baseMap = M.fromList (zip bases baseSp)
+      synMap <- foldM (addSynonym baseMap) M.empty (_csSyn cs)
+      let resolver = M.union synMap baseMap
+          allSp = genAll bases
+          spNameAll = M.fromList [ (s, M.findWithDefault (autoName s) s inv) | s <- allSp ]
+            where
+              autoName (Pure x)  = x
+              autoName (Mix x y) = x <> "+" <> y
+              -- inverse of the resolver: species -> its declared name
+              inv = M.fromList [ (s, n) | (n, s) <- M.toList resolver ]
+          zeros = M.fromList [(s, 0) | s <- allSp]
+          emptySp = Space 0 zeros zeros zeros
+      colMap <- foldM (addColor resolver) M.empty (_csCol cs)
+      actMap <- compileActions resolver allSp (_csAct cs)
+      parMap <- compilePartners resolver allSp (_csPar cs)
+      killMap <- compileKills resolver allSp (_csKill cs)
+      symRules <- compileSympathy resolver (_csSym cs)
+      creRules <- compileCreation resolver (_csCre cs)
+      return (Tables seed bases allSp (_csEnv cs) emptySp resolver spNameAll colMap
+                      actMap parMap killMap symRules creRules)
+  where
+    addSynonym :: M.Map T.Text (Species T.Text) -> M.Map T.Text (Species T.Text)
+               -> (T.Text, T.Text, T.Text) -> Either ErrorKind (M.Map T.Text (Species T.Text))
+    addSynonym resolver m (x, y, z) = do
+        sx <- resolveSpecies resolver x
+        sy <- resolveSpecies resolver y
+        case (sx, sy) of
+          (Pure u, Pure v) | u /= v ->
+              if M.member z m || M.member z resolver
+              then Left (ErrorValidation ("Имя уже используется: " <> z))
+              else Right (M.insert z (mix u v) m)
+          _ -> Left (ErrorValidation ("Гибрид можно получить только из двух разных исходных видов: " <> x <> " x " <> y))
+
+    addColor :: M.Map T.Text (Species T.Text) -> M.Map (Species T.Text) T.Text
+             -> (T.Text, T.Text) -> Either ErrorKind (M.Map (Species T.Text) T.Text)
+    addColor resolver m (n, c) = do
+        s <- resolveSpecies resolver n
+        return (M.insert s c m)
+
+    compileActions :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                   -> [(T.Text, ActionSpec)] -> Either ErrorKind (M.Map (Species T.Text) (ActionRule T.Text))
+    compileActions resolver allSp specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return explicit
+          Just d -> do
+              dRule <- specRule d
+              return (M.fromList [ (s, M.findWithDefault dRule s explicit) | s <- allSp ])
+      where
+        go m (name, _)  | name == "*" = Right m
+        go m (name, spec) = do
+            s <- resolveSpecies resolver name
+            r <- specRule spec
+            return (M.insert s r m)
+        specRule (ActionPercent k)
+            | k < 0 || k > 100 = Left (ErrorValidation "Процент убийства вне диапазона 0..100")
+            | otherwise = Right (ActionKillProb (fromIntegral k % 100))
+        specRule ActionCross = Right ActionKillCross
+        specRule (ActionCrossPercent k)
+            | k < 0 || k > 100 = Left (ErrorValidation "Процент убийства вне диапазона 0..100")
+            | otherwise = Right (ActionKillCrossProb (fromIntegral k % 100))
+
+    compilePartners :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                    -> [(T.Text, PartnerSpec)] -> Either ErrorKind (M.Map (Species T.Text) (PartnerRule T.Text))
+    compilePartners resolver allSp specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return explicit
+          Just d -> do
+              dRule <- specRule d
+              return (M.fromList [ (s, M.findWithDefault dRule s explicit) | s <- allSp ])
+      where
+        go m (name, _)  | name == "*" = Right m
+        go m (name, spec) = do
+            s <- resolveSpecies resolver name
+            r <- specRule spec
+            return (M.insert s r m)
+        specRule (PartnerSpec pref fb cond) = Right (PartnerRule pref fb cond)
+
+    compileKills :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                 -> [(T.Text, KillSpec)] -> Either ErrorKind (M.Map (Species T.Text) (KillRule T.Text))
+    compileKills resolver allSp specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return explicit
+          Just d -> do
+              dRule <- specRule d
+              return (M.fromList [ (s, M.findWithDefault dRule s explicit) | s <- allSp ])
+      where
+        go m (name, _)  | name == "*" = Right m
+        go m (name, spec) = do
+            s <- resolveSpecies resolver name
+            r <- specRule spec
+            return (M.insert s r m)
+        specRule (KillSpec targets excl) = do
+            ex <- mapM (resolveSpecies resolver) excl
+            return (KillRule targets ex)
+
+    compileSympathy :: M.Map T.Text (Species T.Text) -> [SympathySpec]
+                    -> Either ErrorKind [SympathyRule T.Text]
+    compileSympathy resolver specs = do
+        rules <- mapM go specs
+        return (L.sortOn (negate . concreteness . _srActor) rules)
+      where
+        go (SympathySpec apat clauses) = do
+            checkNames resolver (patternNames apat)
+            cs <- mapM checkClause clauses
+            return (SympathyRule apat cs)
+        -- percentages are absolute probabilities
+        checkClause (ppat, p, mcond) = do
+            checkPercent p
+            checkNames resolver (patternNames ppat)
+            return (ppat, fromIntegral p % 100, mcond)
+
+    compileCreation :: M.Map T.Text (Species T.Text) -> [CreationSpec]
+                    -> Either ErrorKind [CreationRule T.Text]
+    compileCreation resolver specs = do
+        rules <- mapM go specs
+        return (L.sortOn (negate . (\(CreationRule a p _) -> concreteness a + concreteness p)) rules)
+      where
+        go (CreationSpec apat ppat results) = do
+            checkNames resolver (patternNames apat)
+            checkNames resolver (patternNames ppat)
+            rs <- mapM checkResult results
+            return (CreationRule apat ppat rs)
+        checkResult (rpat, p) = do
+            checkPercent p
+            checkNames resolver (patternNames rpat)
+            return (rpat, fromIntegral p % 100)
+
+    checkNames resolver ns = mapM_ (\n -> void (resolveSpecies resolver n)) ns
+    checkPercent p | p < 0 || p > 100 = Left (ErrorValidation "Процент вне диапазона 0..100")
+                   | otherwise = Right ()

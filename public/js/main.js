@@ -1,209 +1,280 @@
-const wsAddr = 'ws://127.0.0.1:8000/ws'
+/*
+ * Игра 8885 — frontend.
+ *
+ * Подключается к ws://127.0.0.1:8000/ws, отображает динамику популяций
+ * (ApexCharts), управляет симуляцией (старт/пауза/шаг/рестарт/выбор правил).
+ *
+ * Протокол (кратко):
+ *   сервер при подключении шлёт {"type":"hello",...} и {"type":"init",...};
+ *   после каждого шага шлёт {"type":"state",...};
+ *   команды: {"type":"start"|"pause"|"step"|"restart"|"init"},
+ *            {"type":"select","file":...}.
+ *
+ * Длинные истории: полные данные хранятся в state; для рендера строится
+ * представление с децимацией — при числе шагов > MAX_POINTS берётся каждый
+ * k-й шаг (k = ceil(n / MAX_POINTS)) плюс последний, чтобы график оставался
+ * отзывчивым. Zoom/pan работают по этому представлению.
+ */
 
-var blockCloseCallback = false;
-var connectionEstablished = false;
-var ws = new WebSocket(wsAddr, 'ui');
+'use strict';
 
-const FRAMEPERIOD = 500;
+const WS_URL = 'ws://127.0.0.1:8000/ws';
+const MAX_POINTS = 3000;   // максимум точек на рендер до децимации
+const RECONNECT_MS = 2000; // пауза перед переподключением
 
-document.addEventListener("DOMContentLoaded", onLoad);
+// ---------------------------------------------------------------------------
+// Состояние клиента
 
-
-async function sendMsg(msg) {
-    let m = JSON.stringify(msg);
-//    console.log(m);
-	
-    await ws.send(m);
-}
-
-ws.onopen = async (event) => {
-
-    connectionEstablished = true;
-    
-    let msg = "Init"; // {tag: "Init"};
-    
-    await sendMsg(msg);
+const state = {
+    species: [],      // [{ name, color }]
+    steps: [],        // полный список шагов (из init)
+    series: {},       // имя вида -> [численности]
+    running: false,
+    finished: false,
+    result: null,
+    free: 0,
+    step: 0,
+    ruleSet: '',
 };
 
-ws.onmessage = async (event) => {
-    
-    let msg = JSON.parse(event.data);
+let ws = null;
+let chart = null;
+let ruleSelect, btnStart, btnStep, btnRestart, statusEl;
 
-    await dispatchCommand(msg);
-};
+document.addEventListener('DOMContentLoaded', () => {
+    ruleSelect = document.getElementById('rule-select');
+    btnStart = document.getElementById('btn-start');
+    btnStep = document.getElementById('btn-step');
+    btnRestart = document.getElementById('btn-restart');
+    statusEl = document.getElementById('status');
 
-ws.onclose = (event) => {
+    ruleSelect.addEventListener('change', () => {
+        send({ type: 'select', file: ruleSelect.value });
+    });
+    btnStart.addEventListener('click', () => {
+        send(state.running ? { type: 'pause' } : { type: 'start' });
+    });
+    btnStep.addEventListener('click', () => send({ type: 'step' }));
+    btnRestart.addEventListener('click', () => send({ type: 'restart' }));
 
-    connectionEstablished = false;
+    connect();
+});
 
-    if(!blockCloseCallback) {
- 
-    alert("Утеряна связь с сервером");
+// ---------------------------------------------------------------------------
+// WebSocket
 
-    const layout = document.getElementById('layout');
-    layout.innerHTML = "<div class='msg-container err-bg'><h1>Утеряна связь с сервером</h1><button class='pure-button button18' onClick='window.location.reload();' >Перезагрузить страницу</button></div>"
+function connect() {
+    ws = new WebSocket(WS_URL);
+    ws.onopen = () => setStatus('Соединение установлено…');
+    ws.onmessage = (ev) => {
+        let msg;
+        try { msg = JSON.parse(ev.data); }
+        catch (e) { return; }
+        dispatch(msg);
+    };
+    ws.onclose = () => {
+        setStatus('Потеряна связь с сервером, переподключение…');
+        setTimeout(connect, RECONNECT_MS);
+    };
+    ws.onerror = () => { /* onclose сработает следом */ };
+}
 
+function send(obj) {
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
     }
 }
 
-async function dispatchCommand(obj) {
-    
-    switch (obj.tag) {
-    case "WebInit":
-	launchChart(obj.contents);
-	break;
-    case "WebRender":
-	updateChart(obj.contents)
-	break;
-	
+// ---------------------------------------------------------------------------
+// Обработка сообщений сервера
+
+function dispatch(msg) {
+    switch (msg.type) {
+        case 'hello':
+            fillRuleSelect(msg.rules, msg.default);
+            break;
+        case 'init':
+            applyInit(msg);
+            break;
+        case 'state':
+            applyState(msg);
+            break;
+        case 'error':
+            setStatus('Ошибка: ' + msg.message);
+            break;
     }
 }
 
-var chart = undefined;
-var data = [];
-
-function mkSeries(obj)
-{
-    let ss = obj.series;
-    let sers = [];
-    
-    for (let k = 0; k < ss.length; k++) {
-	data[k] = [];
-	for(let i = 0; i < ss[k].seriesPoints.length; i++) {
-	    data[k][i] = {x: ss[k].seriesPoints[i][0], y: ss[k].seriesPoints[i][1]};
-	}
-	
-	let x = {
-	    data: data[k].slice(),
-	    color: ss[k].seriesColor,
-	};
-	sers.push(x);
+function fillRuleSelect(rules, def) {
+    ruleSelect.innerHTML = '';
+    for (const r of rules) {
+        const opt = document.createElement('option');
+        opt.value = r;
+        opt.textContent = r;
+        if (r === def) opt.selected = true;
+        ruleSelect.appendChild(opt);
     }
-
-    //console.log(sers);
-    
-    return sers;
 }
 
-function launchChart(obj)
-{
-    //console.log(obj);
-    
-    let sers = mkSeries(obj);
-    
-    var options = {
-        series: sers,
+function applyInit(msg) {
+    state.species = msg.species.map(([name, color]) => ({ name, color }));
+    state.steps = msg.steps;
+    state.series = {};
+    for (const [name, counts] of Object.entries(msg.series)) {
+        state.series[name] = counts.slice();
+    }
+    state.step = msg.step;
+    state.free = msg.free;
+    state.finished = msg.finished;
+    state.result = msg.result;
+    state.ruleSet = msg.ruleSet;
+    state.running = !!msg.running; // сервер может продолжать автошаги после рестарта
+
+    // держим селектор в соответствии с реально запущенным набором правил
+    if (msg.ruleSet && ruleSelect) {
+        for (const opt of ruleSelect.options) {
+            if (opt.value === msg.ruleSet) { ruleSelect.value = msg.ruleSet; break; }
+        }
+    }
+
+    updateChart();
+    updateControls();
+    updateStatus();
+}
+
+// Численность вида из population-сообщения: принимает и объект
+// {"Имя":n,...}, и массив пар [["Имя",n],...].
+function popCount(pop, name) {
+    if (!pop) return 0;
+    if (Array.isArray(pop)) {
+        for (const [n, c] of pop) if (n === name) return c;
+        return 0;
+    }
+    return pop[name] || 0;
+}
+
+function applyState(msg) {
+    // игнорируем сообщения, если график ещё не инициализирован
+    if (state.species.length === 0) return;
+
+    // при рестарте сервер шлёт init — если пришёл state со старым шагом, пропускаем
+    if (msg.step < state.step && state.steps.length > 0) return;
+
+    const prevStep = state.steps.length > 0 ? state.steps[state.steps.length - 1] : -1;
+    if (msg.step > prevStep) {
+        state.steps.push(msg.step);
+        for (const sp of state.species) {
+            state.series[sp.name].push(popCount(msg.population, sp.name));
+        }
+    }
+    state.step = msg.step;
+    state.free = msg.free;
+    state.finished = msg.finished;
+    state.result = msg.result;
+    state.running = !!msg.running;
+
+    updateChart();
+    updateControls();
+    updateStatus();
+}
+
+// ---------------------------------------------------------------------------
+// Статус и кнопки
+
+function updateStatus() {
+    let text = 'Шаг: ' + state.step + ' | Свободно: ' + state.free;
+    if (state.finished) {
+        text += ' | Игра окончена: ' + (state.result || '—');
+    }
+    setStatus(text);
+}
+
+function setStatus(text) {
+    if (statusEl) statusEl.textContent = text;
+}
+
+function updateControls() {
+    btnStart.textContent = state.running ? 'Пауза' : 'Старт';
+    btnStart.disabled = state.finished;
+    btnStep.disabled = state.running || state.finished;
+    btnRestart.disabled = false;
+}
+
+// ---------------------------------------------------------------------------
+// График
+
+// Представление серий для рендера (с децимацией длинных историй).
+function buildView() {
+    const n = state.steps.length;
+    const k = n > MAX_POINTS ? Math.ceil(n / MAX_POINTS) : 1;
+    const idx = [];
+    for (let i = 0; i < n; i += k) idx.push(i);
+    if (idx.length === 0 || idx[idx.length - 1] !== n - 1) idx.push(n - 1);
+
+    return state.species.map(sp => ({
+        name: sp.name,
+        data: idx.map(i => ({ x: state.steps[i], y: state.series[sp.name][i] })),
+    }));
+}
+
+function chartOptions() {
+    const colors = state.species.map(sp => sp.color);
+    return {
+        series: buildView(),
+        colors: colors,
         chart: {
-            id: 'realtime',
-            height: 640,
+            id: 'population',
             type: 'line',
-            animations: {
-		enabled: true,
-		easing: 'linear',
-		dynamicAnimation: {
-		    speed: FRAMEPERIOD
-		}
-            },
+            height: 560,
+            fontFamily: 'Victor Mono',
+            foreColor: '#d3d3d3',
+            background: 'transparent',
+            animations: { enabled: true, dynamicAnimation: { speed: 200 } },
+            zoom: { enabled: true, type: 'x', autoScaleYaxis: false },
+            pan: { enabled: true, type: 'x' },
             toolbar: {
-		show: false
+                show: true,
+                tools: {
+                    download: false, selection: false,
+                    zoom: true, zoomin: true, zoomout: true,
+                    pan: true, reset: true,
+                },
             },
-          zoom: {
-              enabled: false
-          }
         },
-        dataLabels: {
-            enabled: false
-        },
-        stroke: {
-            curve: 'straight'
-        },
-        title: {
-            text: 'Популяция чибиков',
-            align: 'center',
-	    style: {
-		fontSize:  '24px',
-		fontWeight:  'bold',
-		fontFamily:  'Victor Mono',
-		color:  '#f3f3f3'
-	    },
-        },
-	grid: {
-	    xaxis: {
-		lines: {
-		    show: true,
-		}
-	    },
-
-	    yaxis: {
-		lines: {
-		    show: true,
-		}
-	    },
-	    
-	    borderColor: '#f3f3f3'
-	},
-        markers: {
-            size: 0
-        },
+        dataLabels: { enabled: false },
+        stroke: { curve: 'straight', width: 2 },
+        markers: { size: 0 },
+        grid: { borderColor: '#454545', strokeDashArray: 0 },
         xaxis: {
-	    type: 'numeric',
-	    tickAmount: 'dataPoints',
-            range: 1,
-	    labels: {
-		style: {
-		    colors: "#f3f3f3",
-		    fontSize: '16px',
-		    fontFamily: 'Victor Mono',
-		}
-	    }
+            type: 'numeric',
+            title: { text: 'Шаг' },
+            labels: { style: { colors: '#d3d3d3', fontSize: '12px' } },
+            axisBorder: { color: '#454545' },
+            axisTicks: { color: '#454545' },
         },
         yaxis: {
-	    tickAmount: 10,
-	    min: -1,
-            max: 1,
-	    labels: {
-		style: {
-		    colors: "#f3f3f3",
-		    fontSize: '16px',
-		    fontFamily: 'Victor Mono',
-		}
-	    }
+            min: 0,
+            title: { text: 'Популяция' },
+            labels: { style: { colors: '#d3d3d3', fontSize: '12px' } },
         },
         legend: {
-            show: false
+            show: true,
+            position: 'bottom',
+            labels: { colors: '#d3d3d3' },
         },
+        tooltip: { theme: 'dark' },
     };
-    
-    const chel = document.getElementById('chart');
-    
-    chart = new ApexCharts(chel, options);
-    chart.render();
-          
-    window.setInterval(frameCallback, FRAMEPERIOD);   
-
 }
 
-async function updateChart(obj)
-{
-    let sers = mkSeries(obj);
-    
-    chart.updateSeries(sers);
-
-}
-
-async function frameCallback()
-{
-    if(connectionEstablished) {
-	
-	let msg = "Step"; //{tag: "Step"};
-    
-	await sendMsg(msg);
+function updateChart() {
+    if (state.species.length === 0) return;
+    const el = document.getElementById('chart');
+    const series = buildView();
+    if (!chart) {
+        chart = new ApexCharts(el, chartOptions());
+        chart.render();
+    } else {
+        chart.updateOptions({ colors: state.species.map(sp => sp.color) });
+        chart.updateSeries(series);
     }
-    
-}
-
-async function onLoad()
-{
-    console.log("8885");
-   
 }

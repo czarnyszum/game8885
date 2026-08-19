@@ -1,149 +1,73 @@
 {-# LANGUAGE TemplateHaskell #-}
 
+-- | Core domain types for the game 8885: species, field state and
+--   environment parameters. This module is intentionally free of rule
+--   interpretation; rules live in "Pattern" and the simulation in "Sim".
 module Species where
 
 import           Control.Lens
-import           Control.Monad.Except
-import           Control.Monad.State
 
-import           Data.List
-import qualified Data.Map             as M
--- import           Data.Maybe
-import qualified Data.Text            as T
+import qualified Data.List   as L
+import qualified Data.Map    as M
+import           Data.Ratio  ((%))
 
-import           System.Random
-
-import           Probability.Sample
-
+-- | A species: a pure (base) species or a hybrid of two base species.
 data Species b = Pure b | Mix b b deriving (Eq, Ord, Show)
 
+-- | Normalized hybrid constructor (components kept sorted).
 mix :: Ord b => b -> b -> Species b
 mix x y | x < y = Mix x y
 mix x y | x > y = Mix y x
-mix _ _ = error "Mixing same species should not happen"
+mix _ _ = error "Species.mix: mixing identical species"
 
+isPure :: Species b -> Bool
+isPure (Pure _) = True
+isPure _        = False
+
+isHybrid :: Species b -> Bool
+isHybrid = not . isPure
+
+-- | All unordered pairs of a list (the components are distinct).
 genPairs :: [b] -> [(b, b)]
-genPairs xs = go xs []
-    where
-      go [] acc       = acc
-      go (u : us) acc = go us (acc ++ map (\y -> (u, y)) us)
+genPairs []       = []
+genPairs (u : us) = map (\y -> (u, y)) us ++ genPairs us
 
+-- | All species: every base species plus every hybrid of two distinct bases.
 genAll :: Ord b => [b] -> [Species b]
 genAll bs =
-       let
-           ss = sort bs
-           p1 = map Pure ss
-           p2 = map (\(x, y) -> Mix x y) . genPairs $ ss
-       in
-         p1 ++ p2
+    let ss = L.sort bs
+    in map Pure ss ++ map (uncurry mix) (genPairs ss)
 
-data Action = Kill | Fuck
+-- | The two possible actions a chibik may take.
+data Action = Kill | Fuck deriving (Eq, Show)
 
+-- | Field state.
+--
+--   * @_freeSpace@  — number of free slots on the field;
+--   * @_population@ — alive chibiks per species;
+--   * @_blocked@    — chibiks that cannot be chosen as partners this turn
+--                     (rule 2: the two parents and the child of every
+--                     reproduction are blocked until the end of the turn);
+--   * @_cross@      — chibiks that just reproduced with a chibik of another
+--                     color this turn (targets of the White kill behavior).
 data Space b = Space {
       _freeSpace  :: Int,
-      _population :: M.Map (Species b) Int
+      _population :: M.Map (Species b) Int,
+      _blocked    :: M.Map (Species b) Int,
+      _cross      :: M.Map (Species b) Int
     }
 makeLenses ''Space
 
-data Tables b = Tables {
-      _randGen      :: StdGen,
-      _spBase       :: [b],
-      _spAll        :: [Species b],
-      _killRatio    :: Generator Bool,
-      _rapeRatio    :: Generator Bool,
-      _space        :: Space b,
-      _nameResolver :: M.Map T.Text (Species b),
-      _spColor      :: M.Map (Species b) T.Text,
-      _actionGen    :: Space b -> Generator Action,
-      _killGen      :: M.Map (Species b) ((Space b) -> Generator (Species b)),
-      _fuckGen      :: M.Map (Species b) ((Space b) -> Generator (Species b)),
-      _sympathyGen  :: M.Map (Species b, Species b) (Generator Bool),
-      _creationGen  :: M.Map (Species b, Species b) (Generator (Species b))
-    }
-makeLenses ''Tables
+-- | Environment parameters (the "Параметры" section of a rule file).
+data Env = Env {
+      _envSpaceSize :: Int,       -- ^ Поле: total slots on the field
+      _envInitial   :: Int,       -- ^ Начало: initial chibiks per base species
+      _envWin       :: Int,       -- ^ Победа: species count that ends the game
+      _envRape      :: Rational,  -- ^ Изнасилование: prob. of rape on refusal
+      _envMaxSteps  :: Int        -- ^ Максимум шагов: step cap (0 = unlimited)
+    } deriving (Eq, Show)
+makeLenses ''Env
 
-data ErrorKind b = ErrorResolution b
-
-type SpaceCtx b a = ExceptT (ErrorKind b) (StateT (Tables b) IO) a
-
-newSpace :: Ord b => SpaceCtx b (Space b)
-newSpace =
-    do
-      bs <- gets (view spAll)
-      s <- gets (view space)
-      let
-          inj x = (x, 0)
-          pop = M.fromList . map inj $ bs
-          unoc = view freeSpace s
-      return (Space unoc pop)
-
-chooseAction :: Ord b => Species b -> Space b -> SpaceCtx b (Space b)
-chooseAction x sp =
-    do
-      s <- gets (view space)
-      actG <- gets (view actionGen)
-      act <- sample randGen (actG s)
-      case act of
-        Kill -> killAction x sp
-        Fuck -> fuckAction x sp
-
-fuckAction :: Ord b => Species b -> Space b -> SpaceCtx b (Space b)
-fuckAction x sp =
-    do
-      current <- gets (view space)
-      fuckG <- gets (view fuckGen)
-      symG <- gets (view sympathyGen)
-      let
-          fg = (fuckG M.! x) current
-      y <- sample randGen fg
-      let
-          sym = symG M.! (x, y)
-      outcome <- sample randGen sym
-      if outcome
-      then creationAction x y sp
-      else rapeAction x y sp
-
-creationAction :: Ord b => Species b -> Species b -> Space b -> SpaceCtx b (Space b)
-creationAction x y sp =
-    do
-      cGen <- gets (view creationGen)
-      z <- sample randGen (cGen M.! (x, y))
-      let
-          occ = over freeSpace pred
-          currentUp = over population (M.adjust pred x . M.adjust pred y)
-          newUp = over population (M.adjust succ x . M.adjust succ y . M.adjust succ z)
-      modify (over space currentUp)
-      return (occ . newUp $ sp)
-
-rapeAction :: Ord b => Species b -> Species b -> Space b -> SpaceCtx b (Space b)
-rapeAction x y sp =
-    do
-      ratio <- gets (view killRatio)
-      outcome <- sample randGen ratio
-      if outcome
-      then creationAction x y sp
-      else
-          do
-            let
-                currentUp = over population (M.adjust pred y . M.adjust pred x)
-                occ = over freeSpace pred
-                newUp = over population (M.adjust succ y)
-            modify (over space currentUp)
-            return (occ . newUp $ sp)
-
-killAction :: Ord b => Species b -> Space b -> SpaceCtx b (Space b)
-killAction x sp =
-    do
-      current <- gets (view space)
-      kill <- gets (view killGen)
-      ratio <- gets (view killRatio)
-      let
-          kG = (kill M.! x) current
-      y <- sample randGen kG
-      outcome <- sample randGen ratio
-      let
-          currentUp = if outcome then over population (M.adjust pred y) else over population (M.adjust pred x)
-          occ = over freeSpace succ
-          newUp = if outcome then over population (M.adjust succ x) else over population (M.adjust succ y)
-      modify (over space currentUp)
-      return (occ . newUp $ sp)
+-- | Default environment: the original game parameters.
+defaultEnv :: Env
+defaultEnv = Env 888 5 555 (1 % 2) 0

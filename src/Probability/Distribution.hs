@@ -42,8 +42,10 @@ fromList xs = Distribution $ M.fromDistinctAscList $ zip vs scaledPs
   where
     as = map aggregate $ groupBy ((==) `F.on` fst) $ sortBy (comparing fst) xs
       where
-        aggregate ys = let (v : _, qs) = unzip ys in
-            (v, fromRational $ toRational $ sum qs)
+        aggregate [] = error "fromList: empty group"   -- groups are never empty
+        aggregate ys@((v, _) : _) =
+            let qs = map snd ys
+            in (v, fromRational $ toRational $ sum qs)
     (vs, ps) = unzip $ filter ((> 0) . snd) as
     t = sum ps
     scaledPs = if t /= 1 then map (/ t) ps else ps

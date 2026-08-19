@@ -146,13 +146,13 @@ safeFromDistribution d = if size d == 0
 
 --   Runs in constant @O(1)@ time.
 sample :: RandomGen g => MonadState s m => Lens' s g -> Generator a -> m a  --- g -> (a, g)
-sample proj g = proj %%= go g
+sample proj gen = proj %%= go
     where
-      go g k = (values g ! i, k'')
+      go k = (values gen ! i, k'')
           where
-            n = capacity g
+            n = capacity gen
             (j, k') = randomR (0, n - 1) k
             (u, k'') = random k'
-            i = if u < probabilities g ! j
+            i = if u < probabilities gen ! j
                 then j
-                else indexes g ! j
+                else indexes gen ! j
