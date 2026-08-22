@@ -252,6 +252,8 @@ compileDecls decls seed = do
             return (M.insert s r m)
         specRule (PartnerSpec pref fb cond) = do
             checkCond resolver cond
+            checkTokens resolver pref
+            checkTokens resolver fb
             return (PartnerRule pref fb cond)
 
     compileKills :: M.Map T.Text (Species T.Text) -> [Species T.Text]
@@ -270,6 +272,7 @@ compileDecls decls seed = do
             r <- specRule spec
             return (M.insert s r m)
         specRule (KillSpec targets excl) = do
+            checkTokens resolver targets
             ex <- mapM (resolveSpecies resolver) excl
             return (KillRule targets ex)
 
@@ -385,5 +388,13 @@ compileDecls decls seed = do
     checkCond :: M.Map T.Text (Species T.Text) -> Maybe Cond -> Either ErrorKind ()
     checkCond _ Nothing = Right ()
     checkCond resolver (Just c) = void (resolveSpecies resolver (condName c))
+    -- | Concrete species names inside tokens (kill targets, partner
+    --   preferences/fallbacks) must be defined species; special tokens
+    --   (~я~, *, variables, ...) need no resolution.
+    checkTokens :: M.Map T.Text (Species T.Text) -> [PatSp T.Text] -> Either ErrorKind ()
+    checkTokens resolver = mapM_ (\t ->
+        case t of
+          ConstName n -> void (resolveSpecies resolver n)
+          _           -> Right ())
     checkPercent p | p < 0 || p > 100 = Left (ErrorValidation "Процент вне диапазона 0..100")
                    | otherwise = Right ()

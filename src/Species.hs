@@ -47,10 +47,13 @@ data Action = Kill | Fuck deriving (Eq, Show)
 --   * @_lifeDeath@ — its current probability of dying at the next death
 --                     check (the end of the turn). Grows every turn per the
 --                     aging law, drops on a successful kill (reward) and
---                     grows on a successful reproduction (penalty).
+--                     grows on a successful reproduction (penalty);
+--   * @_lifeActed@ — whether it has already acted this turn (rule: each
+--                     chibik acts exactly once per turn; reset every turn).
 data Life = Life {
       _lifeAge   :: Int,
-      _lifeDeath :: Rational
+      _lifeDeath :: Rational,
+      _lifeActed :: Bool
     } deriving (Eq, Show)
 makeLenses ''Life
 

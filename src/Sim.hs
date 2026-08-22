@@ -106,16 +106,21 @@ data ActionResult =
   deriving (Eq, Show)
 
 -- | Pick a random individual of the species that will act (its index in the
---   species' life list).
+--   species' life list). Only individuals that have not acted yet this turn
+--   are eligible (each chibik acts exactly once per turn, 2.6); the picked
+--   individual is marked as acted before the action starts, so the index is
+--   valid regardless of later list mutations.
 pickActor :: Species T.Text -> SimCtx (Maybe Int)
 pickActor a = do
     tbl <- get
     let ls = M.findWithDefault [] a (view (space.population) tbl)
-    case ls of
+        idxs = [ i | (i, l) <- zip [0 ..] ls, not (_lifeActed l) ]
+    case idxs of
       [] -> return Nothing
       _  -> do
-          let d = fromDistribution (uniform [0 .. length ls - 1])
+          let d = fromDistribution (uniform idxs)
           i <- sample randGen d
+          modify (over (space.population) (M.adjust (updateAt i (set lifeActed True)) a))
           return (Just i)
 
 -- | Probability that a kill attempt of the species succeeds (Успех убийства).
@@ -340,7 +345,7 @@ createChild a p = do
     child <- creationResult a p
     tbl <- get
     let p0 = M.findWithDefault (1 % 100) child (view lifeStart tbl)
-    modify (over (space.population) (M.adjust (++ [Life 0 p0]) child))
+    modify (over (space.population) (M.adjust (++ [Life 0 p0 False]) child))
     modify (over (space.freeSpace) (subtract 1))
     return child
 
@@ -349,7 +354,9 @@ createChild a p = do
 --   as free slots allow), block the parents and all children, mark
 --   cross-color reproducers and apply the reproduction penalty to the acting
 --   chibik (@i@-th individual of species @a@). A drawn zero produces no
---   offspring: nothing happens, no penalty.
+--   offspring: nothing happens, no penalty. The blocked/cross counters are
+--   clamped to the species' populations so the invariant
+--   B(s) ≤ N(s), C(s) ≤ N(s) (11.2) holds at all times.
 doRepro :: Species T.Text -> Int -> Species T.Text -> SimCtx ()
 doRepro a i p = do
     tbl <- get
@@ -358,16 +365,25 @@ doRepro a i p = do
     if n <= 0 then return ()
     else do
         kids <- createChildren n
+        tbl' <- get
+        let popN s = length (M.findWithDefault [] s (view (space.population) tbl'))
+            bump key m = M.insertWith (+) key 1 m
+            clampTo key m = M.adjust (\b -> min b (popN key)) key m
+            affected = a : p : kids
+            mBlkInc = foldr bump M.empty affected
+            mCrsInc = if a /= p then foldr bump M.empty [a, p] else M.empty
         -- rule 2: parents and all children are blocked for the rest of the
-        -- turn. insertWith re-creates the entries every turn (finishTurn
+        -- turn; insertWith re-creates the entries every turn (finishTurn
         -- clears the maps; M.adjust would silently do nothing on the
-        -- cleared maps from the second turn on).
-        modify (over (space.blocked) $
-            M.insertWith (+) a 1 . M.insertWith (+) p 1
-            . foldr (\c rest -> M.insertWith (+) c 1 . rest) id kids)
+        -- cleared maps from the second turn on). The counters are clamped
+        -- to the species' populations after the merge, so the invariant
+        -- B(s) ≤ N(s), C(s) ≤ N(s) (11.2) holds at all times.
+        modify (over (space.blocked) $ \m ->
+            foldr clampTo (M.unionWith (+) mBlkInc m) affected)
         -- cross-color reproducers (targets of the White behavior)
         when (a /= p) $
-            modify (over (space.cross) (M.insertWith (+) a 1 . M.insertWith (+) p 1))
+            modify (over (space.cross) $ \m ->
+                foldr clampTo (M.unionWith (+) mCrsInc m) [a, p])
         -- reproduction penalty (Штраф за размножение) on the acting chibik
         c <- gets (view (env.envReproPenalty))
         modify (over (space.population) $
@@ -477,6 +493,8 @@ checkEnd = do
 --   game continues).
 stepTurn :: SimCtx (Maybe T.Text)
 stepTurn = do
+    -- each turn starts with every individual unacted (2.6: acts once)
+    modify (over (space.population) (M.map (map (set lifeActed False))))
     tbl <- get
     let remaining = fmap length (view (space.population) tbl)
     go remaining
@@ -521,7 +539,7 @@ initialSpace tbl =
         bases = view spBase tbl
         allSp = view spAll tbl
         pop0 = M.fromList [(s, []) | s <- allSp]
-        life0 b = Life 0 (M.findWithDefault (1 % 100) (Pure b) (view lifeStart tbl))
+        life0 b = Life 0 (M.findWithDefault (1 % 100) (Pure b) (view lifeStart tbl)) False
         pop = foldr (\b -> M.insert (Pure b) (replicate (view envInitial e) (life0 b))) pop0 bases
         total = length bases * view envInitial e
         free = view envSpaceSize e - total
@@ -532,14 +550,18 @@ initialSpace tbl =
 -- ---------------------------------------------------------------------------
 -- Small list helpers
 
--- | Apply a function to the i-th element of a list (no-op when out of range).
+-- | Apply a function to the i-th element of a list (no-op when the index is
+--   outside the list).
 updateAt :: Int -> (a -> a) -> [a] -> [a]
+updateAt i _ xs | i < 0 = xs
 updateAt i f xs = case splitAt i xs of
     (l0, x : post) -> l0 ++ f x : post
     _ -> xs
 
--- | Remove the i-th element of a list (no-op when out of range).
+-- | Remove the i-th element of a list (no-op when the index is outside the
+--   list).
 deleteAt :: Int -> [a] -> [a]
+deleteAt i xs | i < 0 = xs
 deleteAt i xs = case splitAt i xs of
     (l0, _ : post) -> l0 ++ post
     _ -> xs

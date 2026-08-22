@@ -458,8 +458,8 @@ verificationTests = do
       Left err -> putStrLn ("FAIL: " ++ err)
       Right tbl0 -> do
           let sp0 = Space 892
-                    (M.fromList [ (sRed, [Life 0 (1 % 10), Life 0 (2 % 10), Life 0 (3 % 10)])
-                                , (sBlue, replicate 5 (Life 0 0)) ])
+                    (M.fromList [ (sRed, [Life 0 (1 % 10) False, Life 0 (2 % 10) False, Life 0 (3 % 10) False])
+                                , (sBlue, replicate 5 (Life 0 0 False)) ])
                     (M.fromList []) (M.fromList [])
                     (M.fromList [ (sRed, M.empty), (sBlue, M.empty) ])
               tbl1 = set space sp0 tbl0
@@ -477,6 +477,57 @@ verificationTests = do
                      \Симпатии: { Красный < Синий: 100% [НетТакогоВида >= 3]; }\n")
     check "валидация: неизвестный вид в условии Симпатий"
           (isLeft bad2) >>= report
+    -- (4) species names inside kill targets and partner tokens are validated
+    bad3 <- mkTables ("Базовые виды: Красный, Синий;\n\
+                     \Убийство: { Красный: НетТакогоВида; }\n")
+    check "валидация: неизвестный вид в целях Убийства"
+          (isLeft bad3) >>= report
+    bad4 <- mkTables ("Базовые виды: Красный, Синий;\n\
+                     \Партнёры: { Красный: [НетТакогоВида] -> [*]; }\n")
+    check "валидация: неизвестный вид в предпочтениях Партнёров"
+          (isLeft bad4) >>= report
+    bad5 <- mkTables ("Базовые виды: Красный, Синий;\n\
+                     \Партнёры: { Красный: [Красный] -> [НетТакогоВида]; }\n")
+    check "валидация: неизвестный вид в запасных Партнёров"
+          (isLeft bad5) >>= report
+    -- (5) each chibik acts exactly once per turn: after all individuals of
+    -- a species have acted, pickActor returns Nothing
+    rt3 <- mkTables (offspringRules "1: 100%")
+    case rt3 of
+      Left err -> putStrLn ("FAIL: " ++ err)
+      Right tbl0 -> do
+          let tbl1 = set space (initialSpace tbl0) tbl0
+          (picks, _) <- runSim tbl1 (replicateM 11 (pickActor sRed))
+          let nNothing = length (filter (== Nothing) picks)
+          check "2.6: после 10 действий особей красных не осталось" (nNothing == 1) >>= report
+    -- (6) blocked/cross counters stay ≤ population even after many
+    -- reproductions in one turn (invariant 11.2, mid-turn)
+    rt4 <- mkTables (offspringRules "1: 100%")
+    case rt4 of
+      Left err -> putStrLn ("FAIL: " ++ err)
+      Right tbl0 -> do
+          let tbl1 = set space (initialSpace tbl0) tbl0
+          (_, tbl2) <- runSim tbl1 (replicateM 30 (doRepro sRed 0 sBlue))
+          let sp = view space tbl2
+              pop = view population sp
+              blk = view blocked sp
+              crs = view cross sp
+              blkOk = and [ M.findWithDefault 0 s blk <= length (M.findWithDefault [] s pop)
+                          | s <- M.keys blk ]
+              crsOk = and [ M.findWithDefault 0 s crs <= length (M.findWithDefault [] s pop)
+                          | s <- M.keys crs ]
+          putStrLn ("  после 30 размножений: B(Красный)="
+                    ++ show (M.findWithDefault 0 sRed blk)
+                    ++ " N(Красный)=" ++ show (length (M.findWithDefault [] sRed pop)))
+          check "11.2: блокировка не превышает численность" blkOk >>= report
+          check "11.2: «смешанные» не превышают численность" crsOk >>= report
+    -- (7) updateAt/deleteAt are no-ops for out-of-range and negative indices
+    check "updateAt: отрицательный индекс — no-op"
+          (updateAt (-1) (+ 1) [1, 2, 3] == [1, 2, 3]) >>= report
+    check "updateAt: индекс за концом — no-op"
+          (updateAt 5 (+ 1) [1, 2, 3] == [1, 2, 3]) >>= report
+    check "deleteAt: отрицательный индекс — no-op"
+          (deleteAt (-1) [1, 2, 3] == [1, 2, 3]) >>= report
   where
     isLeft (Left _) = True
     isLeft _        = False
