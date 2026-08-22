@@ -3,7 +3,7 @@
 You are taking over a Haskell project. Follow this structured plan to get up to speed and implement finite lifespans for chibiks.
 
 **Initial Onboarding (0–3)**
-0. Start by reading the `README.md` to get a high-level overview of the project.
+0. Start by reading the `../README.md` (и `AGENT-INIT.md` в этой папке) to get a high-level overview of the project.
 1. Thoroughly read all Haskell source files to build a solid understanding of the core implementation.
 2. Examine the `public/js` and `public/css` files to understand the frontend architecture.
 3. Ensure you have a complete grasp of the entire project. Ask questions about anything that remains unclear before proceeding.

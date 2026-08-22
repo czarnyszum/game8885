@@ -189,7 +189,7 @@ runTests = do
     putStrLn "== Минимальная модель triplet.rule =="
     tripletTests
 
-    putStrLn "== Регрессии по MECH.md (блокировка, награда, условия) =="
+    putStrLn "== Регрессии по docs/SPEC.md (блокировка, награда, условия) =="
     verificationTests
 
     putStrLn "== Постоянная конфигурация сервера =="
@@ -424,7 +424,7 @@ configTests = do
     removeFile ".test_conf"
 
 -- ---------------------------------------------------------------------------
--- regressions found during the MECH.md verification
+-- regressions found during the docs/SPEC.md verification
 
 verificationTests :: IO ()
 verificationTests = do

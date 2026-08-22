@@ -1,7 +1,9 @@
 # game8885
 
 Игра в размножение в пространстве `K n` — zero-player simulation ("Игра 8885",
-see `OriginalRules.md`).
+see `docs/OriginalRules.md`).
+
+> Новому агенту: начните с `docs/AGENT-INIT.md`.
 
 ## What this is
 
@@ -14,12 +16,12 @@ A WebSocket-driven simulation of the game 8885:
   of dying at the end of each turn; the probability grows with age (aging
   law, per species), drops after a successful kill (reward) and rises after a
   successful reproduction (penalty); lifespans are tracked and displayed as
-  per-species histograms in the UI (see `SIMS.md` for the math);
+  per-species histograms in the UI (see `docs/SIMS.md` for the math);
 * the DSL (`rules/*.rule`) formalizes the rules: base species, hybrids,
   environment parameters, kill probabilities, kill success, offspring
   distributions, partner preferences, kill targets, sympathies (agreement
   probabilities, including conditional rules), creation outcomes, colors and
-  lifespan parameters — подробное описание языка см. в `LANGUAGE.md`;
+  lifespan parameters — подробное описание языка см. в `docs/LANGUAGE.md`;
 * the Snap server exposes a WebSocket command interface
   (`init`/`start`/`pause`/`restart`/`step`/`update`/`select`/`list`) and
   streams the population of every species and the lifespan histograms after
@@ -108,13 +110,15 @@ Server -> client:
 * `src/Cmd.hs`, `src/Ctx.hs`, `src/Server.hs`, `src/MainPage.hs` — server,
   WebSocket protocol, game context, HTML page;
 * `src/Test.hs`, `src/TestMain.hs` — test suite;
-* `rules/8885.rule` — the full rules of `OriginalRules.md`;
+* `rules/8885.rule` — the full rules of `docs/OriginalRules.md`;
 * `rules/8885A.rule` — a balanced variant (changes and rationale in
-  `ChangeLog.md`);
+  `docs/ChangeLog.md`);
 * `rules/triplet.rule` — minimal model (2 base species + 1 hybrid), used for
   testing the finite-lifespan mechanics;
 * `tools/balance.hs` — statistics tool for tuning rule sets;
-* `SPEC.md` — точная спецификация семантики ядра (источник истины для
+* `docs/` — документация (см. `docs/AGENT-INIT.md` для старта);
+* `docs/SPEC.md` — точная спецификация семантики ядра (источник истины для
   проверки кода; раздел 17 — тонкие места механики);
-* `SIMS.md` — mathematical analysis and simulations of the aging law;
+* `docs/SIMS.md` — mathematical analysis and simulations of the aging law;
+* `docs/DYNAMICS.md` — идеи о том, как делать динамику интереснее;
 * `public/js/main.js` — the web UI.

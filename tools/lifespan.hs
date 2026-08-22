@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 -- | Валидация закона старения: гоняет только фазу старения/смерти (без
 --   действий) и сообщает средний возраст смерти свободного чибика —
---   сравнение с теорией из SIMS.md.
+--   сравнение с теорией из docs/SIMS.md.
 --   Использование:
 --     "$GHC" -O1 -package-db "$PKGDB" -isrc tools/lifespan.hs -o .build/lifespan
 --     .build/lifespan rules/triplet.rule 400 40

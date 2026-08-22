@@ -7,7 +7,7 @@ license-file:        LICENSE
 author:              czarnyszum
 maintainer:          czarnyszum@gmail.com
 build-type:          Simple
-extra-source-files:  ChangeLog.md, README.md
+extra-source-files:  docs/ChangeLog.md, README.md
 cabal-version:       >=1.10
 
 library
