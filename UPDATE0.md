@@ -1,39 +1,38 @@
-Fix grammer, make following plan more clear and coherent:
+**Project Handover and Implementation Plan**
 
-You are taking over a Haskell project. 
+You are taking over a Haskell project. Follow this structured plan to get up to speed and implement finite lifespans for chibiks.
 
-0. Start with reading README.md
+**Initial Onboarding (0–3)**
+0. Start by reading the `README.md` to get a high-level overview of the project.
+1. Thoroughly read all Haskell source files to build a solid understanding of the core implementation.
+2. Examine the `public/js` and `public/css` files to understand the frontend architecture.
+3. Ensure you have a complete grasp of the entire project. Ask questions about anything that remains unclear before proceeding.
 
-1. Then read all the Haskell sources and build a solid understanding of project implementation.
+**Core Implementation: Finite Lifespans (4.0–4.12)**
+The primary goal is to make every chibik's lifespan finite. This requires coordinated changes across the core logic, DSL, rules files, frontend, and documentation.
 
-2. Then read public/js and public/css files to understand the frontend.
+4.0. **Add lifespan attributes**: Give each chibik two individual values: (a) the number of turns it has existed, and (b) its probability of dying at the start of the next move. Add this to the end of the simulation cycle.
 
-3. Make sure you have a solid understanding of project. Ask if anything is unclear to you.
+4.1. **Define the aging law**: This probability must increase every turn. The exact growth law is up to you, but the *expected lifespan* of a free chibik (one not engaged in killing or reproducing) must be controllable. The starting probability at birth and the lifespan-controlling parameters must be specified in the `*.rules` file **per species** (this is crucial). Perform mathematical analysis and simulations to select a suitable law of probability change over turns, and document your findings in `SIMS.md`.
 
-4. We are going to make lifespan of every chibik finite. To do that make following changes to project core, DSL, rules, frontend and docs.
+4.2. **Make killing non-deterministic**: The probability of a successful kill must depend on the species and be defined in the `*.rules` file.
 
-4.0 Let every chibik have two individual value: number of turn chibik has existed and probability to dia at the start of next move
+4.3. **Apply kill penalties/rewards**: A successful kill must *decrease* the chibik's probability of dying on the next turn. The specific law for this decrease is up to you, but it must be global (identical for all species). Its parameter must be defined as an environment parameter, using insights from your research in step 4.1.
 
-4.1 This probability should increase every turn. The specific law of change is up to you but The expected lifespan of free chibik (that is not engaged in killing or reprocducing) should be controlled, this pamaper as well as starting probability at birth should be specified in the *.rule *depending on species* (that is important). So you should do some math and simulations to understand what law of probability chage with turns would look like . Write your findings to SIMS.md  
+4.4. **Make reproduction non-deterministic**: For each species, define a probability distribution over the number of offspring (including zero). This must be specified in the `*.rules` file as a list of probabilities.
 
-4.2 Killing should be non-deterministic now. The probability of successful killing is dependent on species and is contained in *.rules 
+4.5. **Apply reproduction penalties**: A successful reproduction event (producing a non-zero number of offspring) must *increase* the chibik's probability of dying on the next turn. The specific law for this increase is up to you, but it must be global (identical for all species). Its parameter must be defined as an environment parameter, using insights from your research in step 4.1.
 
-4.3 The successful killing leads to decrease of probability of to die at the next turn. Law is up to you, it global is, same for all species, its parameter should be specified as enviroment parameter. Use your research results from 4.1.
+4.6. **Implement lifespan tracking and UI**: Track the total number of turns each chibik lives (its age at death). Generate a histogram of lifespans for each species and display these histograms in the UI.
 
-4.5 Reproduction is also non-deterministic now. For every species there should be a distribution of number of offspring (including zero). It should be speciefied in the *.rules as a list of probabilitites. 
+4.7. **Use the minimal model**: The `rules/triplet.rule` file defines two basic species and one hybrid. Use it as a useful minimal model for testing.
 
-4.6 Successful reproduction (giving birth to non-zero number of descendants) leads to increase of probability to die at the next turn. Law is up to you, it is global, same for all species, its parameter should be specified as enviroment parameter. Use your research results from 4.1.
+4.8. **Update rules and documentation**: Remember to update both the rule files in the `rules/` folder and the DSL description in `LANGUAGE.md` to reflect the new parameters.
 
-4.7 Track every chibik turns for life. Make a histogram over ages for every species and life-display then in the UI
+4.9. **Tune parameters for interesting dynamics**: Perform a quick tuning of all new and existing parameters to achieve interesting game simulations (ideally, some kind of population oscillation). Don't spend too much time on this—rough estimates are sufficient. Start from the `triplet.rule` model (see step 4.7).
 
-4.8 There is a rules/triplet.rule for two basic species and one hybrid. It is useful as minimal model.
+4.10. **Final documentation review**: Double-check all documentation to ensure it accurately represents the current state of the project, especially the rules files and the DSL description.
 
-4.9 Remeber to update both rules in rules folder and LANGUAGE.md descrition docs.
-
-4.10 Make a fast tuning of all new and old parameters for interesting game simulations (we want to see some kind of oscillations). But don't try too hard on that one, just rough guesses. See 4.8
-
-4.11 At the end double check all the docs. They should represent current state of affairs. Escpecailly rules files and DSL description.
-
-4.12 Commit often
+4.11. **Commit often**: Make frequent, atomic commits throughout the entire process.
 
 
