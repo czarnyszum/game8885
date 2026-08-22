@@ -21,8 +21,9 @@ A WebSocket-driven simulation of the game 8885:
   probabilities, including conditional rules), creation outcomes, colors and
   lifespan parameters — подробное описание языка см. в `LANGUAGE.md`;
 * the Snap server exposes a WebSocket command interface
-  (`init`/`start`/`pause`/`restart`/`step`/`select`/`list`) and streams the
-  population of every species and the lifespan histograms after each step;
+  (`init`/`start`/`pause`/`restart`/`step`/`update`/`select`/`list`) and
+  streams the population of every species and the lifespan histograms after
+  each step;
 * the web UI (`public/js/main.js`) plots the population dynamics with pan and
   zoom (ApexCharts) plus the lifespan histograms, and the control buttons.
 
@@ -113,5 +114,7 @@ Server -> client:
 * `rules/triplet.rule` — minimal model (2 base species + 1 hybrid), used for
   testing the finite-lifespan mechanics;
 * `tools/balance.hs` — statistics tool for tuning rule sets;
+* `MECH.md` — точная спецификация семантики ядра (источник истины для
+  проверки кода);
 * `SIMS.md` — mathematical analysis and simulations of the aging law;
 * `public/js/main.js` — the web UI.
