@@ -114,7 +114,7 @@ Server -> client:
 * `rules/triplet.rule` — minimal model (2 base species + 1 hybrid), used for
   testing the finite-lifespan mechanics;
 * `tools/balance.hs` — statistics tool for tuning rule sets;
-* `MECH.md` — точная спецификация семантики ядра (источник истины для
-  проверки кода);
+* `SPEC.md` — точная спецификация семантики ядра (источник истины для
+  проверки кода; раздел 17 — тонкие места механики);
 * `SIMS.md` — mathematical analysis and simulations of the aging law;
 * `public/js/main.js` — the web UI.
