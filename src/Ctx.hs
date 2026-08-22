@@ -11,13 +11,14 @@ import           Control.Exception  (SomeException, finally, try)
 import           Control.Lens
 import           Control.Monad
 
+import qualified Data.Aeson            as A
 import qualified Data.ByteString.Lazy as BL
 import qualified Data.Map             as M
 import qualified Data.Text            as T
 import qualified Data.Text.IO         as TIO
 import qualified Network.WebSockets   as WS
 
-import           System.Directory     (listDirectory)
+import           System.Directory     (doesFileExist, listDirectory)
 import           System.FilePath      (takeExtension)
 import           System.Random        (mkStdGen, randomIO)
 
@@ -49,8 +50,41 @@ data Ctx = Ctx {
       _ctxTickMs    :: Int,
       _ctxMaxHist   :: Int,
       _ctxRules     :: [FilePath],
-      _ctxDefault   :: FilePath
+      _ctxDefault   :: FilePath,
+      _ctxConfig    :: FilePath   -- ^ persistent config file (last rule set)
     }
+
+-- ---------------------------------------------------------------------------
+-- Persistent config: remembers the last rule set chosen by the user
+
+-- | Path of the persistent server config file (relative to the working
+--   directory, i.e. the project root when started via run.sh).
+configPath :: FilePath
+configPath = ".game8885.conf"
+
+-- | The persistent server config: the last rule set chosen by the user.
+data Config = Config { _cfgLastRule :: Maybe FilePath } deriving Show
+
+instance A.FromJSON Config where
+    parseJSON = A.withObject "Config" $ \o -> Config <$> o A..:? "lastRule"
+
+instance A.ToJSON Config where
+    toJSON (Config r) = A.object [ "lastRule" A..= r ]
+
+-- | Read the persisted last rule set (Nothing when absent or unreadable).
+readConfig :: FilePath -> IO (Maybe FilePath)
+readConfig path = do
+    exists <- doesFileExist path
+    if not exists then return Nothing
+    else do
+        bs <- BL.readFile path
+        return (case A.decode bs :: Maybe Config of
+                  Just (Config r) -> r
+                  Nothing         -> Nothing)
+
+-- | Persist the last rule set chosen by the user.
+writeConfig :: FilePath -> FilePath -> IO ()
+writeConfig path rule = BL.writeFile path (A.encode (Config (Just rule)))
 
 -- ---------------------------------------------------------------------------
 -- Initialization
@@ -234,24 +268,37 @@ handleMsg ctx conn bs =
                 broadcast ctx msgs
         CMRestart -> do
             cur <- view gsRuleSet <$> readMVar (_ctxGame ctx)
-            restartWith ctx conn cur
+            _ <- restartWith ctx conn cur
+            return ()
+        CMUpdate -> do
+            -- re-read the current rule file from disk and restart with it
+            cur <- view gsRuleSet <$> readMVar (_ctxGame ctx)
+            _ <- restartWith ctx conn cur
+            return ()
         CMSelectRules file
-            | T.unpack file `elem` _ctxRules ctx -> restartWith ctx conn (T.unpack file)
+            | T.unpack file `elem` _ctxRules ctx -> do
+                ok <- restartWith ctx conn (T.unpack file)
+                -- remember the chosen rule set for the next server start
+                when ok (writeConfig (_ctxConfig ctx) (T.unpack file))
             | otherwise -> send conn (SMError ("Неизвестный файл правил: " <> file))
   where
     send c m = WS.sendDataMessage c (WS.Text (encodeMsg m) Nothing)
 
 -- | Restart the game with the given rule file and inform all clients.
---   The running/paused state is preserved.
-restartWith :: Ctx -> WS.Connection -> FilePath -> IO ()
+--   The running/paused state is preserved. Returns True when the restart
+--   succeeded (the rule file was parsed and compiled).
+restartWith :: Ctx -> WS.Connection -> FilePath -> IO Bool
 restartWith ctx conn ruleFile = do
     wasRunning <- view gsRunning <$> readMVar (_ctxGame ctx)
     r <- initGame ruleFile
     case r of
-      Left e -> send conn (SMError (T.pack e))
+      Left e -> do
+          send conn (SMError (T.pack e))
+          return False
       Right gs -> do
           let gs' = set gsRunning wasRunning gs
           modifyMVar_ (_ctxGame ctx) (const (return gs'))
           broadcast ctx [initMsg gs']
+          return True
   where
     send c m = WS.sendDataMessage c (WS.Text (encodeMsg m) Nothing)

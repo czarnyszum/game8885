@@ -9,8 +9,9 @@
  *   сервер при подключении шлёт {"type":"hello",...} и {"type":"init",...};
  *   после каждого шага шлёт {"type":"state",...} с полем "lifespans" —
  *   гистограммой возраста смерти каждого вида (обновляется каждый ход);
- *   команды: {"type":"start"|"pause"|"step"|"restart"|"init"},
- *            {"type":"select","file":...}.
+ *   команды: {"type":"start"|"pause"|"step"|"restart"|"update"|"init"},
+ *            {"type":"select","file":...} ("update" перечитывает текущий
+ *            файл правил с диска и перезапускает партию).
  *
  * Длинные истории: полные данные хранятся в state; для рендера строится
  * представление с децимацией — при числе шагов > MAX_POINTS берётся каждый
@@ -43,13 +44,14 @@ const state = {
 let ws = null;
 let chart = null;
 let histChart = null;
-let ruleSelect, btnStart, btnStep, btnRestart, statusEl;
+let ruleSelect, btnStart, btnStep, btnRestart, btnUpdate, statusEl;
 
 document.addEventListener('DOMContentLoaded', () => {
     ruleSelect = document.getElementById('rule-select');
     btnStart = document.getElementById('btn-start');
     btnStep = document.getElementById('btn-step');
     btnRestart = document.getElementById('btn-restart');
+    btnUpdate = document.getElementById('btn-update');
     statusEl = document.getElementById('status');
 
     ruleSelect.addEventListener('change', () => {
@@ -60,6 +62,8 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     btnStep.addEventListener('click', () => send({ type: 'step' }));
     btnRestart.addEventListener('click', () => send({ type: 'restart' }));
+    // перечитать выбранный файл правил с диска и перезапустить партию
+    btnUpdate.addEventListener('click', () => send({ type: 'update' }));
 
     connect();
 });
@@ -215,6 +219,7 @@ function updateControls() {
     btnStart.disabled = state.finished;
     btnStep.disabled = state.running || state.finished;
     btnRestart.disabled = false;
+    btnUpdate.disabled = false;
 }
 
 // ---------------------------------------------------------------------------

@@ -21,6 +21,9 @@ import           Pattern
 import           Sim
 import           Species
 
+import           Ctx (readConfig, writeConfig)
+
+import           System.Directory (removeFile)
 import           System.Random (mkStdGen, randomRIO)
 
 -- ---------------------------------------------------------------------------
@@ -185,6 +188,9 @@ runTests = do
 
     putStrLn "== Минимальная модель triplet.rule =="
     tripletTests
+
+    putStrLn "== Постоянная конфигурация сервера =="
+    configTests
 
     putStrLn "== Готово =="
 
@@ -383,6 +389,17 @@ runOneTriplet seed = do
           let tbl1 = set space (initialSpace tbl0) tbl0
               tbl2 = set randGen (mkStdGen seed) tbl1
           runToEnd tbl2 100000
+
+configTests :: IO ()
+configTests = do
+    -- missing config -> Nothing
+    missing <- readConfig ".test_conf_missing"
+    check "конфиг: нет файла -> Nothing" (missing == Nothing) >>= report
+    -- write/read round-trip
+    writeConfig ".test_conf" "rules/triplet.rule"
+    lastRule <- readConfig ".test_conf"
+    check "конфиг: round-trip" (lastRule == Just "rules/triplet.rule") >>= report
+    removeFile ".test_conf"
 
 report :: TestResult -> IO ()
 report OK = putStrLn "  OK"

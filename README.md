@@ -73,8 +73,14 @@ Or with stack in a writable environment: `stack build && stack exec game8885`.
 ## WebSocket protocol
 
 Client -> server (JSON object with a `type` field): `init`, `start`, `pause`,
-`restart`, `step`, `list`, `select` (with `file`). Legacy string events
-`"Init"` and `"Step"` are also accepted.
+`restart`, `step`, `update` (re-read the current rule file from disk and
+restart the game with it), `list`, `select` (with `file`). Legacy string
+events `"Init"` and `"Step"` are also accepted.
+
+The server remembers the last rule set chosen via `select` in the persistent
+config file `.game8885.conf` (JSON, one `lastRule` field; created in the
+working directory and re-read on the next server start, so the game resumes
+with the same rule set).
 
 Server -> client:
 

@@ -42,13 +42,18 @@ launch = do
     rules <- listRuleFiles
     let defaultRule = if "rules/8885.rule" `elem` rules then "rules/8885.rule"
                       else if null rules then "rules/8885.rule" else head rules
-    r <- initGame defaultRule
+    -- start with the rule set the user last chose (if it still exists)
+    lastRule <- readConfig configPath
+    let initialRule = case lastRule of
+                        Just r | r `elem` rules -> r
+                        _ -> defaultRule
+    r <- initGame initialRule
     gs <- case r of
             Left err -> error err
             Right g  -> return g
     gameVar <- newMVar gs
     clientsVar <- newMVar []
-    let ctx = Ctx gameVar clientsVar 100 20000 rules defaultRule
+    let ctx = Ctx gameVar clientsVar 100 20000 rules defaultRule configPath
     _ <- forkIO (ticker ctx)
     Snap.httpServe config (app ctx)
   where

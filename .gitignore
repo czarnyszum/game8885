@@ -76,3 +76,7 @@ flycheck_*.el
 
 # local build output
 .build/
+
+# persistent server config (last selected rule set)
+.game8885.conf
+.test_conf

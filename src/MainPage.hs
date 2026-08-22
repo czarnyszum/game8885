@@ -31,6 +31,7 @@ controlsPanel =
       H.button ! A.id "btn-start" ! A.class_ "pure-button button-ctrl" $ "Старт"
       H.button ! A.id "btn-step"  ! A.class_ "pure-button button-ctrl" $ "Шаг"
       H.button ! A.id "btn-restart" ! A.class_ "pure-button button-ctrl" $ "Рестарт"
+      H.button ! A.id "btn-update" ! A.class_ "pure-button button-ctrl" $ "Обновить правила"
 
 status :: Html
 status = H.div ! A.id "status" ! A.class_ "status" $ return ()

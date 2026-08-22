@@ -21,6 +21,9 @@ main = runClient "127.0.0.1" 8000 "/ws" $ \conn -> do
     sendTextData conn ("{\"type\":\"select\",\"file\":\"rules/triplet.rule\"}" :: BL.ByteString)
     m2 <- recv conn
     putStrLn ("[select] " ++ showFirst m2)
+    sendTextData conn ("{\"type\":\"update\"}" :: BL.ByteString)
+    m4 <- recv conn
+    putStrLn ("[update] " ++ showFirst m4)
     sendTextData conn ("{\"type\":\"restart\"}" :: BL.ByteString)
     m3 <- recv conn
     putStrLn ("[restart] " ++ showFirst m3)

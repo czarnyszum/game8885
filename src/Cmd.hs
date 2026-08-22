@@ -9,6 +9,8 @@
 --   > {"type":"pause"}               — pause automatic stepping
 --   > {"type":"restart"}             — reset the game to its initial state
 --   > {"type":"step"}                — advance one step manually
+--   > {"type":"update"}              — re-read the current rule file from disk
+--                                     and restart the game with it
 --   > {"type":"list"}                — list available rule files
 --   > {"type":"select","file":...}   — load a rule file and restart
 --
@@ -46,6 +48,7 @@ data ClientMsg =
     | CMStep
     | CMListRules
     | CMSelectRules T.Text
+    | CMUpdate
   deriving (Show, Eq)
 
 instance FromJSON ClientMsg where
@@ -62,6 +65,7 @@ instance FromJSON ClientMsg where
           "pause"   -> return CMPause
           "restart" -> return CMRestart
           "step"    -> return CMStep
+          "update"  -> return CMUpdate
           "list"    -> return CMListRules
           "select"  -> CMSelectRules <$> o .: "file"
           _         -> fail ("unknown command: " ++ T.unpack t)) v
