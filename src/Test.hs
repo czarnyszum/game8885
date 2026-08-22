@@ -379,6 +379,25 @@ tripletTests = do
           let finished = all (\(r, _, _) -> maybe False (const True) r) results
           check "triplet: все партии завершились" finished >>= report
           check "triplet: гистограммы не пусты" (all (\(_, _, tb) -> sum [ histSum s tb | s <- view spAll tb ] > 0) results) >>= report
+          -- regression: the hybrid must actually appear during a game
+          -- (the old partner preferences made red x blue pairs impossible)
+          mx <- maxPurpleSeen tbl1 120
+          putStrLn ("  максимум фиолетовых за 120 ходов: " ++ show mx)
+          check "triplet: гибрид появляется в партии" (mx > 0) >>= report
+
+-- | Maximum purple (hybrid) population reached during the first @n@ turns.
+maxPurpleSeen :: Tables T.Text -> Int -> IO Int
+maxPurpleSeen tbl0 n = go 0 (set space (initialSpace tbl0) tbl0) 0
+  where
+    sPurple = Mix "Красный" "Синий"
+    go k tbl mx
+        | k >= n = return mx
+        | otherwise = do
+            (mres, tbl') <- runSim tbl stepTurn
+            let p = length (M.findWithDefault [] sPurple (view (space.population) tbl'))
+            case mres of
+              Just _  -> return (max mx p)
+              Nothing -> go (k + 1) tbl' (max mx p)
 
 runOneTriplet :: Int -> IO (Maybe T.Text, Int, Tables T.Text)
 runOneTriplet seed = do
