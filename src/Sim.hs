@@ -141,8 +141,10 @@ tryAction a i Kill = do
           ok <- sampleBool =<< killSuccessProb a
           if ok
           then do
-              killOne v
+              -- reward first, while the actor's index is still valid: killing
+              -- own species would shift the list and misapply the reward
               applyKillReward a i
+              killVictim a i v
               return ARDone
           else return ARMissed
 tryAction a i Fuck = do
@@ -356,13 +358,16 @@ doRepro a i p = do
     if n <= 0 then return ()
     else do
         kids <- createChildren n
-        -- rule 2: parents and all children are blocked for the rest of the turn
+        -- rule 2: parents and all children are blocked for the rest of the
+        -- turn. insertWith re-creates the entries every turn (finishTurn
+        -- clears the maps; M.adjust would silently do nothing on the
+        -- cleared maps from the second turn on).
         modify (over (space.blocked) $
-            M.adjust (+ 1) a . M.adjust (+ 1) p
-            . foldr (\c rest -> M.adjust (+ 1) c . rest) id kids)
+            M.insertWith (+) a 1 . M.insertWith (+) p 1
+            . foldr (\c rest -> M.insertWith (+) c 1 . rest) id kids)
         -- cross-color reproducers (targets of the White behavior)
         when (a /= p) $
-            modify (over (space.cross) (M.adjust (+ 1) a . M.adjust (+ 1) p))
+            modify (over (space.cross) (M.insertWith (+) a 1 . M.insertWith (+) p 1))
         -- reproduction penalty (Штраф за размножение) on the acting chibik
         c <- gets (view (env.envReproPenalty))
         modify (over (space.population) $
@@ -378,17 +383,20 @@ doRepro a i p = do
             rest <- createChildren (k - 1)
             return (child : rest)
 
--- | Kill a random chibik of the given species (frees a slot).
-killOne :: Species T.Text -> SimCtx ()
-killOne v = do
+-- | Kill a random chibik of the victim species — never the acting chibik
+--   (individual @i@ of species @a@, excluded when it belongs to the victim
+--   species).
+killVictim :: Species T.Text -> Int -> Species T.Text -> SimCtx ()
+killVictim a i v = do
     tbl <- get
     let ls = M.findWithDefault [] v (view (space.population) tbl)
-    case ls of
+        idxs = [ j | j <- [0 .. length ls - 1], v /= a || j /= i ]
+    case idxs of
       [] -> return ()
       _  -> do
-          let d = fromDistribution (uniform [0 .. length ls - 1])
-          i <- sample randGen d
-          killAt v i
+          let d = fromDistribution (uniform idxs)
+          j <- sample randGen d
+          killAt v j
 
 -- | Kill the i-th chibik of the given species: remove it, free a slot and
 --   record its age at death in the lifespan histogram.

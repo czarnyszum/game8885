@@ -250,7 +250,9 @@ compileDecls decls seed = do
             s <- resolveSpecies resolver name
             r <- specRule spec
             return (M.insert s r m)
-        specRule (PartnerSpec pref fb cond) = Right (PartnerRule pref fb cond)
+        specRule (PartnerSpec pref fb cond) = do
+            checkCond resolver cond
+            return (PartnerRule pref fb cond)
 
     compileKills :: M.Map T.Text (Species T.Text) -> [Species T.Text]
                  -> [(T.Text, KillSpec)] -> Either ErrorKind (M.Map (Species T.Text) (KillRule T.Text))
@@ -285,6 +287,7 @@ compileDecls decls seed = do
         checkClause (ppat, p, mcond) = do
             checkPercent p
             checkNames resolver (patternNames ppat)
+            checkCond resolver mcond
             return (ppat, fromIntegral p % 100, mcond)
 
     -- | Compile a per-species percent-valued section (Смертность,
@@ -378,5 +381,9 @@ compileDecls decls seed = do
             return (rpat, fromIntegral p % 100)
 
     checkNames resolver ns = mapM_ (\n -> void (resolveSpecies resolver n)) ns
+    -- | The species name in a condition must be a defined species.
+    checkCond :: M.Map T.Text (Species T.Text) -> Maybe Cond -> Either ErrorKind ()
+    checkCond _ Nothing = Right ()
+    checkCond resolver (Just c) = void (resolveSpecies resolver (condName c))
     checkPercent p | p < 0 || p > 100 = Left (ErrorValidation "Процент вне диапазона 0..100")
                    | otherwise = Right ()

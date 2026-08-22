@@ -189,6 +189,9 @@ runTests = do
     putStrLn "== Минимальная модель triplet.rule =="
     tripletTests
 
+    putStrLn "== Регрессии по MECH.md (блокировка, награда, условия) =="
+    verificationTests
+
     putStrLn "== Постоянная конфигурация сервера =="
     configTests
 
@@ -419,6 +422,79 @@ configTests = do
     lastRule <- readConfig ".test_conf"
     check "конфиг: round-trip" (lastRule == Just "rules/triplet.rule") >>= report
     removeFile ".test_conf"
+
+-- ---------------------------------------------------------------------------
+-- regressions found during the MECH.md verification
+
+verificationTests :: IO ()
+verificationTests = do
+    -- (1) blocked/cross must accumulate after the first turn: finishTurn
+    -- clears the maps, so increments must re-create entries (insertWith),
+    -- not silently no-op (M.adjust) — otherwise rule-2 blocking and the
+    -- White ~смешанные~ behavior die from turn 2 on.
+    rt <- mkTables (offspringRules "1: 100%")
+    case rt of
+      Left err -> putStrLn ("FAIL: " ++ err)
+      Right tbl0 -> do
+          let tbl1 = set space (initialSpace tbl0) tbl0
+          (_, tbl2) <- runSim tbl1 stepTurn          -- clears blocked/cross
+          (_, tbl3) <- runSim tbl2 (doRepro sRed 0 sBlue)
+          let blk = view (space.blocked) tbl3
+              crs = view (space.cross) tbl3
+          putStrLn ("  blocked после 1-го хода: красные="
+                    ++ show (M.findWithDefault 0 sRed blk)
+                    ++ ", синие=" ++ show (M.findWithDefault 0 sBlue blk)
+                    ++ "; cross: красные=" ++ show (M.findWithDefault 0 sRed crs)
+                    ++ ", синие=" ++ show (M.findWithDefault 0 sBlue crs))
+          check "блокировка работает и после 1-го хода"
+                (M.findWithDefault 0 sRed blk >= 1 && M.findWithDefault 0 sBlue blk >= 1) >>= report
+          check "пометка «смешанных» работает и после 1-го хода"
+                (M.findWithDefault 0 sRed crs >= 1 && M.findWithDefault 0 sBlue crs >= 1) >>= report
+    -- (2) the kill reward must hit the ACTING chibik even when it kills its
+    -- own species (a smaller-index victim would shift the list), and the
+    -- acting chibik must never be the victim itself.
+    rt1 <- mkTables killOwnRules
+    case rt1 of
+      Left err -> putStrLn ("FAIL: " ++ err)
+      Right tbl0 -> do
+          let sp0 = Space 892
+                    (M.fromList [ (sRed, [Life 0 (1 % 10), Life 0 (2 % 10), Life 0 (3 % 10)])
+                                , (sBlue, replicate 5 (Life 0 0)) ])
+                    (M.fromList []) (M.fromList [])
+                    (M.fromList [ (sRed, M.empty), (sBlue, M.empty) ])
+              tbl1 = set space sp0 tbl0
+          (_, tbl2) <- runSim tbl1 (tryAction sRed 1 Kill)
+          let probs = map _lifeDeath (M.findWithDefault [] sRed (view (space.population) tbl2))
+          putStrLn ("  после убийства своего вида: смерти=" ++ show probs)
+          check "награда применена к убийце (индекс не сдвинулся)"
+                (0.0 `elem` probs && 0.2 `notElem` probs && length probs == 2) >>= report
+    -- (3) species names inside conditions must be validated at compile time
+    bad1 <- mkTables ("Базовые виды: Красный, Синий;\n\
+                     \Партнёры: { Красный: [Красный] -> [*] [НетТакогоВида < 5]; }\n")
+    check "валидация: неизвестный вид в условии Партнёров"
+          (isLeft bad1) >>= report
+    bad2 <- mkTables ("Базовые виды: Красный, Синий;\n\
+                     \Симпатии: { Красный < Синий: 100% [НетТакогоВида >= 3]; }\n")
+    check "валидация: неизвестный вид в условии Симпатий"
+          (isLeft bad2) >>= report
+  where
+    isLeft (Left _) = True
+    isLeft _        = False
+
+-- | Rules where red always chooses kill and may kill its own species; the
+--   reward is 30% so the acting chibik's death probability clamps to 0.
+killOwnRules :: T.Text
+killOwnRules =
+    "Базовые виды: Красный, Синий;\n\
+    \Параметры: { Поле: 100; Начало: 5; Победа: 60; Изнасилование: 0%; Максимум шагов: 0;\n\
+    \  Награда за убийство: 30%; Штраф за размножение: 10%; }\n\
+    \Действия: { Красный: 100%; Синий: 0%; }\n\
+    \Убийство: { Красный: Красный; }\n\
+    \Симпатии: { * < Красный: 100%; * < Синий: 100%; }\n\
+    \Смертность: { Красный: 0%; Синий: 0%; *: 0%; }\n\
+    \Долголетие: { Красный: 1000; Синий: 1000; *: 1000; }\n\
+    \Успех убийства: { Красный: 100%; Синий: 100%; *: 100%; }\n\
+    \Потомство: { Красный: 0: 100%; Синий: 0: 100%; *: 0: 100%; }\n"
 
 report :: TestResult -> IO ()
 report OK = putStrLn "  OK"

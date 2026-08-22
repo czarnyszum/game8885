@@ -144,6 +144,13 @@ data Cond = CondLess T.Text Int | CondLeq T.Text Int
           | CondGreater T.Text Int | CondGeq T.Text Int
   deriving Show
 
+-- | The species name referenced by a condition (for validation).
+condName :: Cond -> T.Text
+condName (CondLess n _)     = n
+condName (CondLeq n _)      = n
+condName (CondGreater n _)  = n
+condName (CondGeq n _)      = n
+
 -- | Evaluate a condition against the current field state.
 evalCond :: Tables T.Text -> Space T.Text -> Cond -> Bool
 evalCond tbl sp c =
