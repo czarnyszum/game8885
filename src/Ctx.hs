@@ -70,9 +70,9 @@ initGame ruleFile = do
                   hist = [snapshotOf tbl]
               return (Right (GameState ruleFile tbl 0 hist False False Nothing))
 
--- | Initial population snapshot.
+-- | Initial population snapshot (counts per species, for the history).
 snapshotOf :: Tables T.Text -> M.Map (Species T.Text) Int
-snapshotOf = view (space.population)
+snapshotOf = fmap length . view (space.population)
 
 -- | Find rule files in the rules/ directory (sorted for determinism).
 listRuleFiles :: IO [FilePath]
@@ -103,6 +103,7 @@ stepGame gs = do
                         (view gsRunning gs) finished result
         msg = SMState stepN (view freeSpace sp) (view gsRunning gs')
                         finished result (M.fromList (speciesCounts tables'))
+                        (M.fromList (lifespanArrays tables'))
     return (gs', [msg])
   where
     maxHistOf _ = 20000
@@ -112,7 +113,20 @@ speciesCounts :: Tables T.Text -> [(T.Text, Int)]
 speciesCounts tbl =
     let sp = view space tbl
         pop = view population sp
-    in [ (speciesName tbl s, M.findWithDefault 0 s pop) | s <- view spAll tbl ]
+    in [ (speciesName tbl s, length (M.findWithDefault [] s pop)) | s <- view spAll tbl ]
+
+-- | Lifespan histogram of every species as age-indexed arrays, in a stable
+--   order: @[c0, c1, ...]@ where @ck@ is the number of chibiks of that
+--   species that died at age @k@.
+lifespanArrays :: Tables T.Text -> [(T.Text, [Int])]
+lifespanArrays tbl =
+    let h = view (space.histogram) tbl
+    in [ (speciesName tbl s, ageArray (M.findWithDefault M.empty s h))
+       | s <- view spAll tbl ]
+  where
+    ageArray m = case M.keys m of
+        [] -> []
+        ks -> [ M.findWithDefault 0 a m | a <- [0 .. maximum ks] ]
 
 -- | (name, color) of every species, in a stable order.
 speciesColors :: Tables T.Text -> [(T.Text, T.Text)]
@@ -121,7 +135,7 @@ speciesColors tbl =
         def = "#8f8f8f"
     in [ (speciesName tbl s, M.findWithDefault def s col) | s <- view spAll tbl ]
 
--- | Build the full init message (species, colors, history).
+-- | Build the full init message (species, colors, history, lifespans).
 initMsg :: GameState -> ServerMsg
 initMsg gs =
     let tbl = view gsTables gs
@@ -135,6 +149,7 @@ initMsg gs =
               (view gsRunning gs)
               (view gsFinished gs) (view gsResult gs)
               (speciesColors tbl) steps series
+              (M.fromList (lifespanArrays tbl))
   where
     namedSpecies tbl' = [ (speciesName tbl' s, s) | s <- view spAll tbl' ]
 
@@ -147,6 +162,7 @@ stateMsg gs =
                (view gsRunning gs)
                (view gsFinished gs) (view gsResult gs)
                (M.fromList (speciesCounts tbl))
+               (M.fromList (lifespanArrays tbl))
 
 -- ---------------------------------------------------------------------------
 -- Broadcasting

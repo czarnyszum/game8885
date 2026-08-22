@@ -2,11 +2,13 @@
  * Игра 8885 — frontend.
  *
  * Подключается к ws://127.0.0.1:8000/ws, отображает динамику популяций
- * (ApexCharts), управляет симуляцией (старт/пауза/шаг/рестарт/выбор правил).
+ * (ApexCharts) и гистограммы продолжительности жизни по видам, управляет
+ * симуляцией (старт/пауза/шаг/рестарт/выбор правил).
  *
  * Протокол (кратко):
  *   сервер при подключении шлёт {"type":"hello",...} и {"type":"init",...};
- *   после каждого шага шлёт {"type":"state",...};
+ *   после каждого шага шлёт {"type":"state",...} с полем "lifespans" —
+ *   гистограммой возраста смерти каждого вида (обновляется каждый ход);
  *   команды: {"type":"start"|"pause"|"step"|"restart"|"init"},
  *            {"type":"select","file":...}.
  *
@@ -29,6 +31,7 @@ const state = {
     species: [],      // [{ name, color }]
     steps: [],        // полный список шагов (из init)
     series: {},       // имя вида -> [численности]
+    lifespans: {},    // имя вида -> [число умерших в возрасте 0, 1, ...]
     running: false,
     finished: false,
     result: null,
@@ -39,6 +42,7 @@ const state = {
 
 let ws = null;
 let chart = null;
+let histChart = null;
 let ruleSelect, btnStart, btnStep, btnRestart, statusEl;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -123,6 +127,10 @@ function applyInit(msg) {
     for (const [name, counts] of Object.entries(msg.series)) {
         state.series[name] = counts.slice();
     }
+    state.lifespans = {};
+    for (const [name, arr] of Object.entries(msg.lifespans || {})) {
+        state.lifespans[name] = arr.slice();
+    }
     state.step = msg.step;
     state.free = msg.free;
     state.finished = msg.finished;
@@ -138,6 +146,7 @@ function applyInit(msg) {
     }
 
     updateChart();
+    updateHist();
     updateControls();
     updateStatus();
 }
@@ -167,6 +176,13 @@ function applyState(msg) {
             state.series[sp.name].push(popCount(msg.population, sp.name));
         }
     }
+    // гистограммы продолжительности жизни (обновляются каждый ход)
+    if (msg.lifespans) {
+        state.lifespans = {};
+        for (const [name, arr] of Object.entries(msg.lifespans)) {
+            state.lifespans[name] = arr.slice();
+        }
+    }
     state.step = msg.step;
     state.free = msg.free;
     state.finished = msg.finished;
@@ -174,6 +190,7 @@ function applyState(msg) {
     state.running = !!msg.running;
 
     updateChart();
+    updateHist();
     updateControls();
     updateStatus();
 }
@@ -276,5 +293,78 @@ function updateChart() {
     } else {
         chart.updateOptions({ colors: state.species.map(sp => sp.color) });
         chart.updateSeries(series);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Гистограмма продолжительности жизни (по видам)
+
+// Гистограмма возраста смерти: для каждого вида столбики по возрастам
+// 0, 1, 2, ... — сколько чибиков этого вида умерло в этом возрасте.
+function buildHistView() {
+    return state.species.map(sp => {
+        const arr = state.lifespans[sp.name] || [];
+        return {
+            name: sp.name,
+            data: arr.map((y, x) => ({ x, y })),
+        };
+    });
+}
+
+function histOptions() {
+    const colors = state.species.map(sp => sp.color);
+    return {
+        series: buildHistView(),
+        colors: colors,
+        chart: {
+            id: 'lifespans',
+            type: 'bar',
+            height: 320,
+            stacked: false,
+            fontFamily: 'Victor Mono',
+            foreColor: '#d3d3d3',
+            background: 'transparent',
+            animations: { enabled: true, dynamicAnimation: { speed: 200 } },
+            zoom: { enabled: false },
+            toolbar: { show: false },
+        },
+        plotOptions: {
+            bar: { columnWidth: '70%' },
+        },
+        dataLabels: { enabled: false },
+        stroke: { width: 0 },
+        grid: { borderColor: '#454545', strokeDashArray: 0 },
+        xaxis: {
+            type: 'numeric',
+            title: { text: 'Возраст смерти (ходы)' },
+            labels: { style: { colors: '#d3d3d3', fontSize: '12px' } },
+            axisBorder: { color: '#454545' },
+            axisTicks: { color: '#454545' },
+        },
+        yaxis: {
+            min: 0,
+            title: { text: 'Чибиков' },
+            labels: { style: { colors: '#d3d3d3', fontSize: '12px' } },
+        },
+        legend: {
+            show: true,
+            position: 'bottom',
+            labels: { colors: '#d3d3d3' },
+        },
+        tooltip: { theme: 'dark' },
+    };
+}
+
+function updateHist() {
+    if (state.species.length === 0) return;
+    const el = document.getElementById('hist');
+    if (!el) return;
+    const series = buildHistView();
+    if (!histChart) {
+        histChart = new ApexCharts(el, histOptions());
+        histChart.render();
+    } else {
+        histChart.updateOptions({ colors: state.species.map(sp => sp.color) });
+        histChart.updateSeries(series);
     }
 }

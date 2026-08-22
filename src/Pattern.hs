@@ -155,7 +155,7 @@ evalCond tbl sp c =
   where
     count name =
         let s = M.findWithDefault (Pure name) name (_nameResolver tbl)
-        in M.findWithDefault 0 s (_population sp)
+        in length (M.findWithDefault [] s (_population sp))
 
 -- | Sympathy (agreement) rule: an actor pattern and an ordered list of
 --   clauses. The first clause whose partner pattern matches the partner
@@ -188,7 +188,18 @@ data Tables b = Tables {
       _partnerRules  :: M.Map (Species b) (PartnerRule b),
       _killRules     :: M.Map (Species b) (KillRule b),
       _sympathyRules :: [SympathyRule b],
-      _creationRules :: [CreationRule b]
+      _creationRules :: [CreationRule b],
+      -- finite-lifespan parameters (per species, from the rule file):
+      _lifeStart    :: M.Map (Species b) Rational,          -- Смертность: death
+                                                            -- probability at birth
+      _lifeScale    :: M.Map (Species b) Int,               -- Долголетие: aging
+                                                            -- scale L (p rises by
+                                                            -- 1/L per turn)
+      _killSuccess  :: M.Map (Species b) Rational,          -- Успех убийства:
+                                                            -- probability that a
+                                                            -- kill attempt succeeds
+      _offspring    :: M.Map (Species b) [(Int, Rational)]  -- Потомство: offspring
+                                                            -- count distribution
     }
 makeLenses ''Tables
 

@@ -103,3 +103,7 @@ body {
 .chart {
     width: 100%;
 }
+
+.hist-chart {
+    margin-top: 24px;
+}

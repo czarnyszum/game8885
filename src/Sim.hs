@@ -1,9 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 -- | The game simulation: turn logic, action resolution, partner and victim
---   selection, agreement (sympathy) evaluation, creation outcomes and the
---   end-of-game conditions. All randomness goes through the @_randGen@ lens
---   of "Pattern.Tables". Species names are 'T.Text'.
+--   selection, agreement (sympathy) evaluation, creation outcomes, the
+--   finite-lifespan mechanics (aging, kill success, offspring distributions,
+--   lifespan histograms) and the end-of-game conditions. All randomness goes
+--   through the @_randGen@ lens of "Pattern.Tables". Species names are
+--   'T.Text'. The population is tracked per individual: every chibik carries
+--   its age and its current probability of dying at the end of the turn.
 module Sim where
 
 import           Control.Lens
@@ -55,9 +58,9 @@ dominantSpecies :: SimCtx (Maybe (Species T.Text))
 dominantSpecies = do
     tbl <- get
     let pop = view (space.population) tbl
-        mx = maximum (0 : M.elems pop)
+        mx = maximum (0 : map length (M.elems pop))
     if mx <= 0 then return Nothing
-    else sampleUniform [s | (s, n) <- M.toList pop, n == mx]
+    else sampleUniform [s | (s, ls) <- M.toList pop, length ls == mx]
 
 -- | Name resolver used inside pattern contexts.
 resolve :: Tables T.Text -> T.Text -> Maybe (Species T.Text)
@@ -93,32 +96,82 @@ hasCrossTarget a = do
     let crossMap = view cross sp
     return (any (\s -> s /= a && M.findWithDefault 0 s crossMap > 0) (M.keys crossMap))
 
--- | Try to perform the given action. Returns False when the action is not
---   possible (no victim / no partner / field full).
-tryAction :: Species T.Text -> Action -> SimCtx Bool
-tryAction a Kill = do
+-- | Outcome of an attempted action.
+data ActionResult =
+      ARDone         -- ^ the action was performed
+    | ARImpossible   -- ^ the action could not be attempted (no victim/partner,
+                     --   field full): the other action may be tried
+    | ARMissed       -- ^ a kill was attempted but failed (the kill success
+                     --   roll): the turn is spent, no fallback
+  deriving (Eq, Show)
+
+-- | Pick a random individual of the species that will act (its index in the
+--   species' life list).
+pickActor :: Species T.Text -> SimCtx (Maybe Int)
+pickActor a = do
+    tbl <- get
+    let ls = M.findWithDefault [] a (view (space.population) tbl)
+    case ls of
+      [] -> return Nothing
+      _  -> do
+          let d = fromDistribution (uniform [0 .. length ls - 1])
+          i <- sample randGen d
+          return (Just i)
+
+-- | Probability that a kill attempt of the species succeeds (Успех убийства).
+killSuccessProb :: Species T.Text -> SimCtx Rational
+killSuccessProb a = gets (M.findWithDefault 1 a . view killSuccess)
+
+-- | Kill reward (Награда за убийство): a successful kill decreases the
+--   killer's probability of dying (down to zero).
+applyKillReward :: Species T.Text -> Int -> SimCtx ()
+applyKillReward a i = do
+    r <- gets (view (env.envKillReward))
+    modify (over (space.population) $
+        M.adjust (updateAt i (over lifeDeath (max 0 . subtract r))) a)
+
+-- | Try to perform the given action for the acting chibik (individual @i@ of
+--   species @a@).
+tryAction :: Species T.Text -> Int -> Action -> SimCtx ActionResult
+tryAction a i Kill = do
     mv <- chooseVictim a
     case mv of
-      Nothing -> return False
-      Just v  -> killOne v >> return True
-tryAction a Fuck = do
+      Nothing -> return ARImpossible
+      Just v  -> do
+          ok <- sampleBool =<< killSuccessProb a
+          if ok
+          then do
+              killOne v
+              applyKillReward a i
+              return ARDone
+          else return ARMissed
+tryAction a i Fuck = do
     tbl <- get
-    if view (space.freeSpace) tbl <= 0 then return False
+    if view (space.freeSpace) tbl <= 0 then return ARImpossible
     else do
       mp <- choosePartner a
       case mp of
-        Nothing -> return False
-        Just p  -> fuckFlow a p >> return True
+        Nothing -> return ARImpossible
+        Just p  -> do
+            fuckFlow a i p
+            return ARDone
 
 -- | Perform one action for a chibik of the given species (preferred action
 --   first, falling back to the other one when impossible).
 actSpecies :: Species T.Text -> SimCtx ()
 actSpecies a = do
-    pref <- decideAction a
-    ok <- tryAction a pref
-    unless ok $ do
-        _ <- tryAction a (if pref == Kill then Fuck else Kill)
-        return ()
+    mact <- pickActor a
+    case mact of
+      Nothing -> return ()
+      Just i  -> do
+          pref <- decideAction a
+          res <- tryAction a i pref
+          case res of
+            ARDone       -> return ()
+            ARMissed     -> return ()
+            ARImpossible -> do
+                _ <- tryAction a i (if pref == Kill then Fuck else Kill)
+                return ()
 
 -- | Choose a kill victim for the acting species, per its kill rule.
 chooseVictim :: Species T.Text -> SimCtx (Maybe (Species T.Text))
@@ -133,7 +186,7 @@ chooseVictim a = do
         mdom <- dominantSpecies
         ctx <- matchCtx a mdom
         let victimCount s =
-                M.findWithDefault 0 s pop - (if s == a then 1 else 0)
+                length (M.findWithDefault [] s pop) - (if s == a then 1 else 0)
             eligible =
               [ s | s <- allSp
                   , victimCount s > 0
@@ -155,7 +208,7 @@ choosePartner a = do
     mdom <- dominantSpecies
     ctx <- matchCtx a mdom
     let partnerCount s =
-            let popN = M.findWithDefault 0 s (view population sp)
+            let popN = length (M.findWithDefault [] s (view population sp))
                 blkN = M.findWithDefault 0 s (view blocked sp)
                 unblocked = max 0 (popN - blkN)
             in unblocked - (if s == a && not actBlocked then 1 else 0)
@@ -176,17 +229,19 @@ choosePartner a = do
                 [] -> return Nothing
                 _  -> sampleUniform fallback
 
--- | The full reproduction flow: agreement, then creation or rape.
-fuckFlow :: Species T.Text -> Species T.Text -> SimCtx ()
-fuckFlow a p = do
+-- | The full reproduction flow: agreement, then creation or rape. The acting
+--   chibik is the @i@-th individual of species @a@; it is the one that gets
+--   the reproduction penalty, and the one the partner kills on refusal.
+fuckFlow :: Species T.Text -> Int -> Species T.Text -> SimCtx ()
+fuckFlow a i p = do
     agree <- sympathyProb a p
     agreed <- sampleBool agree
-    if agreed then creation a p
+    if agreed then doRepro a i p
     else do
         tbl <- get
         rape <- sampleBool (view (env.envRape) tbl)
-        if rape then creation a p
-        else killOne a   -- the partner kills the initiator
+        if rape then doRepro a i p
+        else killAt a i   -- the partner kills the initiator (that individual)
 
 -- | Agreement probability of the partner towards the acting chibik.
 sympathyProb :: Species T.Text -> Species T.Text -> SimCtx Rational
@@ -276,30 +331,119 @@ creationResult a p
                     s <- sample randGen (fromDistribution (fromList opts))
                     return s
 
--- | Kill a chibik of the given species (frees a slot).
+-- | Birth of one child of a x p (a free slot is assumed to exist). The child
+--   starts with age 0 and the species' starting death probability.
+createChild :: Species T.Text -> Species T.Text -> SimCtx (Species T.Text)
+createChild a p = do
+    child <- creationResult a p
+    tbl <- get
+    let p0 = M.findWithDefault (1 % 100) child (view lifeStart tbl)
+    modify (over (space.population) (M.adjust (++ [Life 0 p0]) child))
+    modify (over (space.freeSpace) (subtract 1))
+    return child
+
+-- | A successful reproduction event: draw the number of offspring from the
+--   acting species' distribution (Потомство), create the children (as many
+--   as free slots allow), block the parents and all children, mark
+--   cross-color reproducers and apply the reproduction penalty to the acting
+--   chibik (@i@-th individual of species @a@). A drawn zero produces no
+--   offspring: nothing happens, no penalty.
+doRepro :: Species T.Text -> Int -> Species T.Text -> SimCtx ()
+doRepro a i p = do
+    tbl <- get
+    let dist = M.findWithDefault [(1, 1)] a (view offspring tbl)
+    n <- sample randGen (fromDistribution (fromList dist))
+    if n <= 0 then return ()
+    else do
+        kids <- createChildren n
+        -- rule 2: parents and all children are blocked for the rest of the turn
+        modify (over (space.blocked) $
+            M.adjust (+ 1) a . M.adjust (+ 1) p
+            . foldr (\c rest -> M.adjust (+ 1) c . rest) id kids)
+        -- cross-color reproducers (targets of the White behavior)
+        when (a /= p) $
+            modify (over (space.cross) (M.adjust (+ 1) a . M.adjust (+ 1) p))
+        -- reproduction penalty (Штраф за размножение) on the acting chibik
+        c <- gets (view (env.envReproPenalty))
+        modify (over (space.population) $
+            M.adjust (updateAt i (over lifeDeath (min 1 . (+ c)))) a)
+  where
+    -- children are appended at the end of the lists, so the actor's index
+    -- stays valid while they are created
+    createChildren k = do
+        tbl' <- get
+        if view (space.freeSpace) tbl' <= 0 || k <= 0 then return []
+        else do
+            child <- createChild a p
+            rest <- createChildren (k - 1)
+            return (child : rest)
+
+-- | Kill a random chibik of the given species (frees a slot).
 killOne :: Species T.Text -> SimCtx ()
 killOne v = do
     tbl <- get
-    let popN = M.findWithDefault 0 v (view (space.population) tbl)
-    when (popN > 0) $ do
-        let newN = popN - 1
-        modify (over (space.population) (M.adjust pred v))
-        modify (over (space.freeSpace) (+ 1))
-        -- a blocked/cross chibik that dies no longer counts
-        modify (over (space.blocked) (M.adjust (\b -> min b newN) v))
-        modify (over (space.cross)   (M.adjust (\c -> min c newN) v))
+    let ls = M.findWithDefault [] v (view (space.population) tbl)
+    case ls of
+      [] -> return ()
+      _  -> do
+          let d = fromDistribution (uniform [0 .. length ls - 1])
+          i <- sample randGen d
+          killAt v i
 
--- | Birth of a child (needs a free slot).
-creation :: Species T.Text -> Species T.Text -> SimCtx ()
-creation a p = do
-    child <- creationResult a p
-    modify (over (space.population) (M.adjust (+ 1) child))
-    modify (over (space.freeSpace) (subtract 1))
-    -- rule 2: parents and child are blocked for the rest of the turn
-    modify (over (space.blocked) (M.adjust (+ 1) a . M.adjust (+ 1) p . M.adjust (+ 1) child))
-    -- white's targets: parents that just reproduced with another color
-    when (a /= p) $
-        modify (over (space.cross) (M.adjust (+ 1) a . M.adjust (+ 1) p))
+-- | Kill the i-th chibik of the given species: remove it, free a slot and
+--   record its age at death in the lifespan histogram.
+killAt :: Species T.Text -> Int -> SimCtx ()
+killAt v i = do
+    tbl <- get
+    let ls = M.findWithDefault [] v (view (space.population) tbl)
+    case drop i ls of
+      [] -> return ()
+      (l : _) -> do
+          let ls' = deleteAt i ls
+              newN = length ls'
+          modify (over (space.population) (M.insert v ls'))
+          modify (over (space.freeSpace) (+ 1))
+          -- a blocked/cross chibik that dies no longer counts
+          modify (over (space.blocked) (M.adjust (\b -> min b newN) v))
+          modify (over (space.cross)   (M.adjust (\c -> min c newN) v))
+          recordDeath v (_lifeAge l)
+
+-- | Record an age at death in the lifespan histogram of a species.
+recordDeath :: Species T.Text -> Int -> SimCtx ()
+recordDeath s age = do
+    tbl <- get
+    let h = view (space.histogram) tbl
+        addAge (Just m) = Just (M.insertWith (+) age 1 m)
+        addAge Nothing  = Just (M.singleton age 1)
+    modify (set (space.histogram) (M.alter addAge s h))
+
+-- | End of turn: each chibik dies with its current death probability; the
+--   survivors age by one turn and their death probability rises by 1/L per
+--   the species' lifespan scale (the aging law). Deaths free slots and are
+--   recorded in the lifespan histogram.
+ageAndDie :: SimCtx ()
+ageAndDie = do
+    tbl <- get
+    let spp = M.keys (view (space.population) tbl)
+    forM_ spp $ \s -> do
+        ls <- gets (M.findWithDefault [] s . view (space.population))
+        scale <- gets (M.findWithDefault 60 s . view lifeScale)
+        (ls', freed) <- foldM (stepLife s scale) ([], 0) ls
+        modify (over (space.population) (M.insert s (reverse ls')))
+        when (freed > 0) $
+            modify (over (space.freeSpace) (+ freed))
+  where
+    stepLife s scale (acc, freed) l = do
+        die <- sampleBool (_lifeDeath l)
+        if die
+        then do
+            recordDeath s (_lifeAge l)
+            return (acc, freed + 1)
+        else do
+            let inc = 1 % fromIntegral scale
+                l' = l & lifeAge   +~ 1
+                       & lifeDeath %~ min 1 . (+ inc)
+            return (l' : acc, freed)
 
 -- | End-of-game check. Returns the result description when the game is over.
 checkEnd :: SimCtx (Maybe T.Text)
@@ -309,23 +453,24 @@ checkEnd = do
         e = view env tbl
         free = view freeSpace sp
         pop = view population sp
-        total = sum (M.elems pop)
+        total = sum (map length (M.elems pop))
     if free <= 0
     then return (Just "Поле полностью заполнено")
     else if total < 5
     then return (Just "Вымирание: на поле осталось менее 5 чибиков")
     else
-        case [ s | (s, n) <- M.toList pop, n >= view envWin e ] of
+        case [ s | (s, ls) <- M.toList pop, length ls >= view envWin e ] of
           (s : _) -> return (Just ("Победа вида: " <> speciesName tbl s))
           [] -> return Nothing
 
 -- | Perform one full turn: every chibik alive at the start of the turn acts
---   once, in random order. Returns the end-of-game result (Nothing when the
+--   once, in random order; at the end of the turn the lifespan mechanics
+--   run (aging and death). Returns the end-of-game result (Nothing when the
 --   game continues).
 stepTurn :: SimCtx (Maybe T.Text)
 stepTurn = do
     tbl <- get
-    let remaining = view (space.population) tbl
+    let remaining = fmap length (view (space.population) tbl)
     go remaining
   where
     go remaining' = do
@@ -337,7 +482,7 @@ stepTurn = do
             let pop = view (space.population) tbl
                 eligible = [ (s, r) | (s, r) <- M.toList remaining'
                                     , r > 0
-                                    , M.findWithDefault 0 s pop > 0 ]
+                                    , not (null (M.findWithDefault [] s pop)) ]
             case eligible of
               [] -> finishTurn Nothing
               _ -> do
@@ -348,20 +493,45 @@ stepTurn = do
                     actSpecies s
                     go (M.adjust pred s remaining')
 
-    finishTurn mres = do
-        -- end of turn: blocked/cross state is reset
-        modify (set (space.blocked) M.empty . set (space.cross) M.empty)
-        return mres
+    finishTurn mres = case mres of
+        Just r -> do
+            -- the game is over: no aging; blocked/cross state is reset
+            modify (set (space.blocked) M.empty . set (space.cross) M.empty)
+            return (Just r)
+        Nothing -> do
+            -- end of turn: aging and death, then the end conditions are
+            -- re-checked (old age can cause extinction)
+            ageAndDie
+            modify (set (space.blocked) M.empty . set (space.cross) M.empty)
+            checkEnd
 
--- | The initial field for a rule set: @Начало@ chibiks of each base species.
+-- | The initial field for a rule set: @Начало@ chibiks of each base species,
+--   all with age 0 and the species' starting death probability.
 initialSpace :: Tables T.Text -> Space T.Text
 initialSpace tbl =
     let e = view env tbl
         bases = view spBase tbl
         allSp = view spAll tbl
-        pop0 = M.fromList [(s, 0) | s <- allSp]
-        pop = foldr (\b -> M.insert (Pure b) (view envInitial e)) pop0 bases
+        pop0 = M.fromList [(s, []) | s <- allSp]
+        life0 b = Life 0 (M.findWithDefault (1 % 100) (Pure b) (view lifeStart tbl))
+        pop = foldr (\b -> M.insert (Pure b) (replicate (view envInitial e) (life0 b))) pop0 bases
         total = length bases * view envInitial e
         free = view envSpaceSize e - total
         zeros = M.fromList [(s, 0) | s <- allSp]
-    in Space free pop zeros zeros
+        hist0 = M.fromList [(s, M.empty) | s <- allSp]
+    in Space free pop zeros zeros hist0
+
+-- ---------------------------------------------------------------------------
+-- Small list helpers
+
+-- | Apply a function to the i-th element of a list (no-op when out of range).
+updateAt :: Int -> (a -> a) -> [a] -> [a]
+updateAt i f xs = case splitAt i xs of
+    (l0, x : post) -> l0 ++ f x : post
+    _ -> xs
+
+-- | Remove the i-th element of a list (no-op when out of range).
+deleteAt :: Int -> [a] -> [a]
+deleteAt i xs = case splitAt i xs of
+    (l0, _ : post) -> l0 ++ post
+    _ -> xs

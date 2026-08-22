@@ -358,13 +358,95 @@ parseCreations =
                ps <- parseCreationLine `sepBy` whiteSpace
                return [DeclCreations ps]
 
+-- | "Вид: N%;" — per-species percentage line (Смертность, Успех убийства).
+parsePercentLine :: Parser (T.Text, Int)
+parsePercentLine =
+    do
+      n <- parseRuleName
+      _ <- symbol ":"
+      k <- integer
+      _ <- symbol "%"
+      _ <- symbol ";"
+      return (n, k)
+
+-- | "Вид: N;" — per-species integer line (Долголетие).
+parseScaleLine :: Parser (T.Text, Int)
+parseScaleLine =
+    do
+      n <- parseRuleName
+      _ <- symbol ":"
+      k <- integer
+      _ <- symbol ";"
+      return (n, k)
+
+parseMortalities :: Parser [Decl]
+parseMortalities =
+    do
+      _ <- symbol "Смертность:"
+      braces $
+             do
+               _ <- whiteSpace
+               ms <- parsePercentLine `sepBy` whiteSpace
+               return [DeclMortalities ms]
+
+parseScales :: Parser [Decl]
+parseScales =
+    do
+      _ <- symbol "Долголетие:"
+      braces $
+             do
+               _ <- whiteSpace
+               ls <- parseScaleLine `sepBy` whiteSpace
+               return [DeclScales ls]
+
+parseKillSuccess :: Parser [Decl]
+parseKillSuccess =
+    do
+      _ <- symbol "Успех убийства:"
+      braces $
+             do
+               _ <- whiteSpace
+               ks <- parsePercentLine `sepBy` whiteSpace
+               return [DeclKillSuccess ks]
+
+-- | One "k: N%" pair of an offspring distribution.
+parseOffspringPair :: Parser (Int, Int)
+parseOffspringPair =
+    do
+      k <- integer
+      _ <- symbol ":"
+      p <- integer
+      _ <- symbol "%"
+      return (k, p)
+
+-- | "Вид: 0: 20% 1: 60% 2: 20%;" — offspring distribution of a species.
+parseOffspringLine :: Parser (T.Text, OffspringSpec)
+parseOffspringLine =
+    do
+      n <- parseRuleName
+      _ <- symbol ":"
+      pairs <- many1 parseOffspringPair
+      _ <- symbol ";"
+      return (n, pairs)
+
+parseOffspring :: Parser [Decl]
+parseOffspring =
+    do
+      _ <- symbol "Потомство:"
+      braces $
+             do
+               _ <- whiteSpace
+               os <- parseOffspringLine `sepBy` whiteSpace
+               return [DeclOffspring os]
+
 parseDecl :: Parser [Decl]
 parseDecl =
     do
       _ <- whiteSpace
       try parseBase <|> try parseParams <|> try parseSynonyms <|> try parseColors
           <|> try parseActions <|> try parsePartners <|> try parseKills
-          <|> try parseCreations <|> parseSympathies
+          <|> try parseCreations <|> try parseMortalities <|> try parseScales
+          <|> try parseKillSuccess <|> try parseOffspring <|> parseSympathies
 
 parseDecls :: Parser [Decl]
 parseDecls = fmap join $ many1 parseDecl

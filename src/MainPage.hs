@@ -42,6 +42,7 @@ pageContent =
       controlsPanel
       status
       H.div ! A.id "chart" ! A.class_ "chart" $ return ()
+      H.div ! A.id "hist" ! A.class_ "chart hist-chart" $ return ()
 
 mainPage :: Html
 mainPage =

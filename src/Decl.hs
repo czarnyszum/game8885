@@ -42,6 +42,9 @@ data SympathySpec = SympathySpec (Pat T.Text) [(Pat T.Text, Int, Maybe Cond)]
 data CreationSpec = CreationSpec (Pat T.Text) (Pat T.Text) [(Pat T.Text, Int)]
   deriving Show
 
+-- | Offspring distribution: (number of offspring, percent) pairs.
+type OffspringSpec = [(Int, Int)]
+
 data Decl =
       DeclBase [T.Text]
     | DeclSynonym (T.Text, T.Text, T.Text)
@@ -52,6 +55,10 @@ data Decl =
     | DeclKills [(T.Text, KillSpec)]
     | DeclSympathies [SympathySpec]
     | DeclCreations [CreationSpec]
+    | DeclMortalities [(T.Text, Int)]               -- Смертность: percent
+    | DeclScales [(T.Text, Int)]                    -- Долголетие: integer
+    | DeclKillSuccess [(T.Text, Int)]               -- Успех убийства: percent
+    | DeclOffspring [(T.Text, OffspringSpec)]       -- Потомство: pairs
 
 instance Show Decl where
     show (DeclBase xs)         = "Базовые виды:" ++ concatMap ((" " ++) . T.unpack) xs
@@ -63,6 +70,10 @@ instance Show Decl where
     show (DeclKills ks)        = "Убийство: " ++ show ks
     show (DeclSympathies ss)   = "Симпатии: " ++ show ss
     show (DeclCreations cs)    = "Рождение: " ++ show cs
+    show (DeclMortalities ms)  = "Смертность: " ++ show ms
+    show (DeclScales ls)       = "Долголетие: " ++ show ls
+    show (DeclKillSuccess ks)  = "Успех убийства: " ++ show ks
+    show (DeclOffspring os)    = "Потомство: " ++ show os
 
 -- ---------------------------------------------------------------------------
 -- Errors
@@ -80,19 +91,23 @@ instance Show ErrorKind where
 
 -- | Intermediate compile state.
 data CS = CS {
-      _csBase :: [T.Text],
-      _csSyn  :: [(T.Text, T.Text, T.Text)],
-      _csCol  :: [(T.Text, T.Text)],
-      _csEnv  :: Env,
-      _csAct  :: [(T.Text, ActionSpec)],
-      _csPar  :: [(T.Text, PartnerSpec)],
-      _csKill :: [(T.Text, KillSpec)],
-      _csSym  :: [SympathySpec],
-      _csCre  :: [CreationSpec]
+      _csBase  :: [T.Text],
+      _csSyn   :: [(T.Text, T.Text, T.Text)],
+      _csCol   :: [(T.Text, T.Text)],
+      _csEnv   :: Env,
+      _csAct   :: [(T.Text, ActionSpec)],
+      _csPar   :: [(T.Text, PartnerSpec)],
+      _csKill  :: [(T.Text, KillSpec)],
+      _csSym   :: [SympathySpec],
+      _csCre   :: [CreationSpec],
+      _csMort  :: [(T.Text, Int)],
+      _csScale :: [(T.Text, Int)],
+      _csKSuc  :: [(T.Text, Int)],
+      _csOff   :: [(T.Text, OffspringSpec)]
     }
 
 emptyCS :: CS
-emptyCS = CS [] [] [] defaultEnv [] [] [] [] []
+emptyCS = CS [] [] [] defaultEnv [] [] [] [] [] [] [] [] []
 
 applyDecl :: CS -> Decl -> Either ErrorKind CS
 applyDecl cs (DeclBase xs)     = Right cs { _csBase = xs }
@@ -104,15 +119,21 @@ applyDecl cs (DeclPartners ps) = Right cs { _csPar = _csPar cs ++ ps }
 applyDecl cs (DeclKills ks)    = Right cs { _csKill = _csKill cs ++ ks }
 applyDecl cs (DeclSympathies ss) = Right cs { _csSym = _csSym cs ++ ss }
 applyDecl cs (DeclCreations cr) = Right cs { _csCre = _csCre cs ++ cr }
+applyDecl cs (DeclMortalities ms) = Right cs { _csMort = _csMort cs ++ ms }
+applyDecl cs (DeclScales ls)    = Right cs { _csScale = _csScale cs ++ ls }
+applyDecl cs (DeclKillSuccess ks) = Right cs { _csKSuc = _csKSuc cs ++ ks }
+applyDecl cs (DeclOffspring os) = Right cs { _csOff = _csOff cs ++ os }
 
 applyParam :: CS -> (T.Text, T.Text) -> Either ErrorKind CS
 applyParam cs (name, value) =
     case name of
-      "Поле"           -> setInt envSpaceSize
-      "Начало"         -> setInt envInitial
-      "Победа"         -> setInt envWin
-      "Максимум шагов" -> setInt envMaxSteps
-      "Изнасилование"  -> setRat envRape
+      "Поле"               -> setInt envSpaceSize
+      "Начало"             -> setInt envInitial
+      "Победа"             -> setInt envWin
+      "Максимум шагов"     -> setInt envMaxSteps
+      "Изнасилование"      -> setRat envRape
+      "Награда за убийство"   -> setRat envKillReward
+      "Штраф за размножение"  -> setRat envReproPenalty
       _ -> Left (ErrorValidation ("Неизвестный параметр: " <> name))
   where
     setInt :: Lens' Env Int -> Either ErrorKind CS
@@ -156,15 +177,22 @@ compileDecls decls seed = do
               -- inverse of the resolver: species -> its declared name
               inv = M.fromList [ (s, n) | (n, s) <- M.toList resolver ]
           zeros = M.fromList [(s, 0) | s <- allSp]
-          emptySp = Space 0 zeros zeros zeros
+          emptyLives = M.fromList [(s, []) | s <- allSp]
+          emptyHist = M.fromList [(s, M.empty) | s <- allSp]
+          emptySp = Space 0 emptyLives zeros zeros emptyHist
       colMap <- foldM (addColor resolver) M.empty (_csCol cs)
       actMap <- compileActions resolver allSp (_csAct cs)
       parMap <- compilePartners resolver allSp (_csPar cs)
       killMap <- compileKills resolver allSp (_csKill cs)
       symRules <- compileSympathy resolver (_csSym cs)
       creRules <- compileCreation resolver (_csCre cs)
+      mortMap <- compilePercentMap resolver allSp (1 % 100) (_csMort cs)
+      scaleMap <- compileScaleMap resolver allSp 60 (_csScale cs)
+      ksucMap <- compilePercentMap resolver allSp 1 (_csKSuc cs)
+      offMap <- compileOffspring resolver allSp (_csOff cs)
       return (Tables seed bases allSp (_csEnv cs) emptySp resolver spNameAll colMap
-                      actMap parMap killMap symRules creRules)
+                      actMap parMap killMap symRules creRules
+                      mortMap scaleMap ksucMap offMap)
   where
     addSynonym :: M.Map T.Text (Species T.Text) -> M.Map T.Text (Species T.Text)
                -> (T.Text, T.Text, T.Text) -> Either ErrorKind (M.Map T.Text (Species T.Text))
@@ -258,6 +286,80 @@ compileDecls decls seed = do
             checkPercent p
             checkNames resolver (patternNames ppat)
             return (ppat, fromIntegral p % 100, mcond)
+
+    -- | Compile a per-species percent-valued section (Смертность,
+    --   Успех убийства) with a "*" default rule.
+    compilePercentMap :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                      -> Rational  -- ^ default value (species without an entry)
+                      -> [(T.Text, Int)]
+                      -> Either ErrorKind (M.Map (Species T.Text) Rational)
+    compilePercentMap resolver allSp def specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return (M.fromList [ (s, M.findWithDefault def s explicit) | s <- allSp ])
+          Just d -> do
+              dVal <- checkPct d
+              return (M.fromList [ (s, M.findWithDefault dVal s explicit) | s <- allSp ])
+      where
+        go m (name, _) | name == "*" = Right m
+        go m (name, k) = do
+            s <- resolveSpecies resolver name
+            v <- checkPct k
+            return (M.insert s v m)
+        checkPct k
+            | k < 0 || k > 100 = Left (ErrorValidation "Процент вне диапазона 0..100")
+            | otherwise = Right (fromIntegral k % 100)
+
+    -- | Compile the per-species lifespan scale (Долголетие) with a "*" rule.
+    compileScaleMap :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                    -> Int  -- ^ default scale (species without an entry)
+                    -> [(T.Text, Int)]
+                    -> Either ErrorKind (M.Map (Species T.Text) Int)
+    compileScaleMap resolver allSp def specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return (M.fromList [ (s, M.findWithDefault def s explicit) | s <- allSp ])
+          Just d -> do
+              dVal <- checkScale d
+              return (M.fromList [ (s, M.findWithDefault dVal s explicit) | s <- allSp ])
+      where
+        go m (name, _) | name == "*" = Right m
+        go m (name, k) = do
+            s <- resolveSpecies resolver name
+            v <- checkScale k
+            return (M.insert s v m)
+        checkScale k
+            | k < 1 = Left (ErrorValidation "Долголетие должно быть не меньше 1")
+            | otherwise = Right k
+
+    -- | Compile the per-species offspring distribution (Потомство) with a
+    --   "*" rule. Percentages must sum to exactly 100%.
+    compileOffspring :: M.Map T.Text (Species T.Text) -> [Species T.Text]
+                     -> [(T.Text, OffspringSpec)]
+                     -> Either ErrorKind (M.Map (Species T.Text) [(Int, Rational)])
+    compileOffspring resolver allSp specs = do
+        explicit <- foldM go M.empty specs
+        case lookup "*" specs of
+          Nothing -> return (M.fromList [ (s, M.findWithDefault [(1, 1)] s explicit) | s <- allSp ])
+          Just d -> do
+              dVal <- checkDist d
+              return (M.fromList [ (s, M.findWithDefault dVal s explicit) | s <- allSp ])
+      where
+        go m (name, _) | name == "*" = Right m
+        go m (name, pairs) = do
+            s <- resolveSpecies resolver name
+            v <- checkDist pairs
+            return (M.insert s v m)
+        checkDist pairs = do
+            mapM_ (\k -> if k < 0
+                         then Left (ErrorValidation "Число потомков не может быть отрицательным")
+                         else Right ()) (map fst pairs)
+            mapM_ (\p -> if p < 0 || p > 100
+                         then Left (ErrorValidation "Процент потомства вне диапазона 0..100")
+                         else Right ()) (map snd pairs)
+            if sum (map snd pairs) /= 100
+            then Left (ErrorValidation "Сумма вероятностей потомства должна быть 100%")
+            else Right [ (k, fromIntegral p % 100) | (k, p) <- pairs ]
 
     compileCreation :: M.Map T.Text (Species T.Text) -> [CreationSpec]
                     -> Either ErrorKind [CreationRule T.Text]

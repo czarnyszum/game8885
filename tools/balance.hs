@@ -43,12 +43,18 @@ main = do
     -- average final population shares per species (per-game share, then averaged)
     let finals = map thd3 results
         avgShare s =
-            let shares = [ if t > 0 then 100 * fromIntegral (M.findWithDefault 0 s (view (space.population) tbl)) / fromIntegral t else 0
-                         | tbl <- finals, let t = sum (M.elems (view (space.population) tbl)) ]
+            let shares = [ if t > 0 then 100 * fromIntegral (length (M.findWithDefault [] s (view (space.population) tbl))) / fromIntegral t else 0
+                         | tbl <- finals, let t = sum (map length (M.elems (view (space.population) tbl))) ]
             in sum shares / fromIntegral (length shares)
-    putStrLn "средняя доля в финале (% от всех чибиков):"
-    mapM_ (\(nm, sh) -> putStrLn ("  " ++ T.unpack nm ++ ": " ++ show (round sh :: Int) ++ "%"))
-          (zip names (map avgShare speciesOrder))
+        avgAge s =
+            let allAges = [ a
+                          | tbl <- finals
+                          , (age, k) <- M.toList (M.findWithDefault M.empty s (view (space.histogram) tbl))
+                          , a <- replicate k age ]
+            in if null allAges then 0 else fromIntegral (sum allAges) / fromIntegral (length allAges)
+    putStrLn "средняя доля в финале (% от всех чибиков) и средний возраст смерти:"
+    mapM_ (\(nm, sh, aa) -> putStrLn ("  " ++ T.unpack nm ++ ": " ++ show (round sh :: Int) ++ "%, возраст смерти ~" ++ show (round aa :: Int)))
+          (zip3 names (map avgShare speciesOrder) (map avgAge speciesOrder))
   where
     getArgs' = getArgs
 

@@ -23,7 +23,7 @@ The primary goal is to make every chibik's lifespan finite. This requires coordi
 
 4.5. **Apply reproduction penalties**: A successful reproduction event (producing a non-zero number of offspring) must *increase* the chibik's probability of dying on the next turn. The specific law for this increase is up to you, but it must be global (identical for all species). Its parameter must be defined as an environment parameter, using insights from your research in step 4.1.
 
-4.6. **Implement lifespan tracking and UI**: Track the total number of turns each chibik lives (its age at death). Generate a histogram of lifespans for each species and display these histograms in the UI.
+4.6. **Implement lifespan tracking and UI**: Track the total number of turns each chibik lives (its age at death). Generate a histogram of lifespans for each species and display these histograms in the UI. Update at every turn.
 
 4.7. **Use the minimal model**: The `rules/triplet.rule` file defines two basic species and one hybrid. Use it as a useful minimal model for testing.
 

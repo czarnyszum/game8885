@@ -19,10 +19,15 @@
 --   > {"type":"hello","rules":[...],"default":"rules/8885.rule"}
 --   > {"type":"init","ruleSet":...,"step":n,"free":n,"finished":bool,
 --      "result":...,"species":[["Имя","#цвет"],...],
---      "steps":[0..n],"series":{"Имя":[c0,c1,...],...}}
+--      "steps":[0..n],"series":{"Имя":[c0,c1,...],...},
+--      "lifespans":{"Имя":[h0,h1,...],...}}
 --   > {"type":"state","step":n,"free":n,"finished":bool,"result":...,
---      "population":{"Имя":n,...}}
+--      "population":{"Имя":n,...},"lifespans":{"Имя":[h0,h1,...],...}}
 --   > {"type":"error","message":...}
+--
+--   @lifespans@ is the lifespan histogram of every species: @hk@ is the
+--   number of chibiks of that species that died at age @k@ (accumulated over
+--   the game, refreshed after every step).
 module Cmd where
 
 import           Data.Aeson
@@ -77,13 +82,15 @@ data ServerMsg =
                 smResult   :: Maybe T.Text,
                 smSpecies  :: [(T.Text, T.Text)],      -- (name, color)
                 smSteps    :: [Int],                   -- step numbers
-                smSeries   :: [(T.Text, [Int])] }      -- per-species counts
+                smSeries   :: [(T.Text, [Int])],       -- per-species counts
+                smLifespans :: M.Map T.Text [Int] }    -- age -> deaths per species
     | SMState { smStep       :: Int,
                 smFree       :: Int,
                 smRunning    :: Bool,
                 smFinished   :: Bool,
                 smResult     :: Maybe T.Text,
-                smPopulation :: M.Map T.Text Int }     -- name -> count
+                smPopulation :: M.Map T.Text Int,      -- name -> count
+                smLifespans  :: M.Map T.Text [Int] }   -- age -> deaths per species
     | SMError { smMessage :: T.Text }
 
 instance ToJSON ServerMsg where
@@ -92,7 +99,7 @@ instance ToJSON ServerMsg where
         , "rules" .= rules
         , "default" .= def
         ]
-    toJSON (SMInit rs step free run fin res sps steps series) = object
+    toJSON (SMInit rs step free run fin res sps steps series lifespans) = object
         [ "type" .= ("init" :: T.Text)
         , "ruleSet" .= rs
         , "step" .= step
@@ -103,8 +110,9 @@ instance ToJSON ServerMsg where
         , "species" .= sps
         , "steps" .= steps
         , "series" .= M.fromList series
+        , "lifespans" .= lifespans
         ]
-    toJSON (SMState step free run fin res pop) = object
+    toJSON (SMState step free run fin res pop lifespans) = object
         [ "type" .= ("state" :: T.Text)
         , "step" .= step
         , "free" .= free
@@ -112,6 +120,7 @@ instance ToJSON ServerMsg where
         , "finished" .= fin
         , "result" .= res
         , "population" .= pop
+        , "lifespans" .= lifespans
         ]
     toJSON (SMError m) = object
         [ "type" .= ("error" :: T.Text)
